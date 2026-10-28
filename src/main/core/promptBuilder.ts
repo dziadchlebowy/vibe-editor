@@ -5,7 +5,16 @@ import type { TaskView } from '../../shared/types.ts';
 export interface PromptContext {
   mapName: string;
   mapFolder: string;
+  /** Czy istnieje _vibe/assets (kopie assetów użytych na mapie). */
+  hasAssets?: boolean;
 }
+
+/** Krótka notka: gdzie szukać dokładnych danych o splinach i obiektach (bez wklejania ich do promptu). */
+export const ASSETS_NOTE =
+  'Dokładne dane o splinach (.sli) i obiektach (.sco) użytych na mapie leżą w `_vibe/assets/` ' +
+  '(ścieżki jak w folderze OMSI, np. `_vibe/assets/Splines/...`). Szukaj konkretnych plików przez Glob/Grep ' +
+  'i czytaj tylko te, których potrzebujesz. Lista kafli i użytych assetów: `_vibe/map-index.json` ' +
+  '(duży plik — przeszukuj Grepem, nie czytaj całego).';
 
 /** Składa jeden plik tekstowy z zaznaczonych zadań (tytuł, treść, zakres kafli). */
 export function buildPrompt(tasks: TaskView[], ctx: PromptContext): string {
@@ -16,6 +25,7 @@ export function buildPrompt(tasks: TaskView[], ctx: PromptContext): string {
     '',
     'Wykonaj poniższe zadania, edytując pliki mapy w bieżącym katalogu roboczym.',
     'Folder `_vibe` zawiera pliki pomocnicze edytora — nie modyfikuj go, chyba że zadanie tego wymaga.',
+    ...(ctx.hasAssets ? [ASSETS_NOTE] : []),
     '',
   ];
   tasks.forEach((t, i) => {

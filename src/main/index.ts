@@ -15,6 +15,7 @@ import { ClaudeRunner } from './core/claude.ts';
 import type { Emit } from './core/emit.ts';
 import { findMapFolders, writeMapInfo } from './core/globalCfg.ts';
 import { GitRunner, setupRepo } from './core/git.ts';
+import { assetsDir, buildMapIndex, loadMapIndex, toOverview } from './core/mapIndex.ts';
 import { buildPrompt, writePromptFile } from './core/promptBuilder.ts';
 import { loadSettings, saveSettings, targetBranch, vibeDir } from './core/settings.ts';
 import { TaskStore } from './core/tasks.ts';
@@ -25,6 +26,7 @@ let win: BrowserWindow | null = null;
 let settings: Settings;
 let runner: ClaudeRunner;
 let saving = false;
+let indexing = false;
 
 const consoleBuffer: ConsoleLine[] = [];
 
@@ -56,6 +58,33 @@ function taskStore(): TaskStore | null {
 
 function currentMap() {
   return findMapFolders(settings.workDir).find((m) => m.folder === settings.mapFolder);
+}
+
+// --- indeks mapy -------------------------------------------------------------
+
+/** Wczytuje kafle mapy, zbiera ścieżki assetów i kopiuje je z OMSI do _vibe/assets. */
+async function runIndex(): Promise<OkResult> {
+  if (indexing) return fail('Indeksowanie mapy już trwa.');
+  if (!settings.configured || !settings.workDir || !settings.mapFolder) {
+    return fail('Najpierw skonfiguruj folder roboczy.');
+  }
+  indexing = true;
+  win?.webContents.send('map:changed');
+  try {
+    await buildMapIndex({
+      workDir: settings.workDir,
+      mapFolder: settings.mapFolder,
+      omsiDir: settings.omsiDir,
+      emit,
+    });
+    return { ok: true };
+  } catch (e) {
+    emit('app', `Błąd indeksowania mapy: ${errMsg(e)}`);
+    return fail(errMsg(e));
+  } finally {
+    indexing = false;
+    win?.webContents.send('map:changed');
+  }
 }
 
 // --- konfiguracja ----------------------------------------------------------
@@ -111,6 +140,13 @@ async function saveAll(req: SaveRequest): Promise<OkResult> {
       branch: targetBranch(req),
     });
 
+    const prev = settings;
+    const attachedNew =
+      prev.workDir !== req.workDir ||
+      prev.mapFolder !== map.folder ||
+      prev.omsiDir !== req.omsiDir ||
+      !loadMapIndex(req.workDir);
+
     settings = {
       omsiDir: req.omsiDir,
       workDir: req.workDir,
@@ -123,6 +159,7 @@ async function saveAll(req: SaveRequest): Promise<OkResult> {
     saveSettings(settingsFile(), settings);
     emit('app', 'Konfiguracja zapisana, zmiany wypchnięte do repozytorium.');
     win?.webContents.send('tasks:changed');
+    if (attachedNew) void runIndex();
     return { ok: true };
   } catch (e) {
     emit('app', `Błąd konfiguracji: ${errMsg(e)}`);
@@ -226,11 +263,16 @@ function registerIpc(): void {
   ipcMain.handle('run:start', (_e, ids: string[]): OkResult => {
     const store = taskStore();
     if (!store) return fail('Najpierw skonfiguruj folder roboczy.');
+    if (indexing) return fail('Trwa indeksowanie mapy i kopiowanie assetów — poczekaj na zakończenie.');
     const tasks = store.list().filter((t) => t.status === 'active' && ids.includes(t.id));
     if (tasks.length === 0) return fail('Zaznacz co najmniej jedno zadanie.');
     try {
       const map = currentMap();
-      const text = buildPrompt(tasks, { mapName: map?.name ?? settings.mapFolder, mapFolder: settings.mapFolder });
+      const text = buildPrompt(tasks, {
+        mapName: map?.name ?? settings.mapFolder,
+        mapFolder: settings.mapFolder,
+        hasAssets: fs.existsSync(assetsDir(settings.workDir)),
+      });
       const file = writePromptFile(vibeDir(settings.workDir), text);
       emit('app', `Zapisano prompt: ${file}`);
       runner.start(text, tasks.map((t) => t.id));
@@ -249,6 +291,13 @@ function registerIpc(): void {
     }
   });
   ipcMain.handle('run:state', () => runner.state);
+
+  ipcMain.handle('map:overview', () => {
+    const idx = settings.workDir ? loadMapIndex(settings.workDir) : null;
+    return idx && idx.mapFolder === settings.mapFolder ? toOverview(idx) : null;
+  });
+  ipcMain.handle('map:reindex', () => runIndex());
+  ipcMain.handle('map:indexing', () => indexing);
 
   ipcMain.handle('console:history', () => consoleBuffer);
 }

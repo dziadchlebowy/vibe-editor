@@ -1,6 +1,7 @@
 import type {
   ConsoleLine,
   InspectResult,
+  MapOverview,
   OkResult,
   RunState,
   SaveRequest,
@@ -30,10 +31,15 @@ export interface VeApi {
   resumeRun(): Promise<OkResult>;
   getRunState(): Promise<RunState>;
 
+  getMapOverview(): Promise<MapOverview | null>;
+  reindexMap(): Promise<OkResult>;
+  isMapIndexing(): Promise<boolean>;
+
   getConsoleHistory(): Promise<ConsoleLine[]>;
 
   onConsoleLine(cb: (line: ConsoleLine) => void): void;
   onRunState(cb: (state: RunState) => void): void;
   onTasksChanged(cb: () => void): void;
+  onMapChanged(cb: () => void): void;
   onOpenSettings(cb: () => void): void;
 }

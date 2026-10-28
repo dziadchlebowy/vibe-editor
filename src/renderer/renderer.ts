@@ -8,41 +8,12 @@ import type {
   TaskView,
 } from '../shared/types.ts';
 
+import { $, clear, h } from './dom.ts';
+import { mountMap, setMapBusy, setMapData, showMap } from './mapView.ts';
+
 const ve = window.ve;
 
 // --- pomocnicze DOM --------------------------------------------------------
-
-type Child = Node | string | null | undefined | false;
-
-function h<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  props: Record<string, unknown> = {},
-  ...children: Child[]
-): HTMLElementTagNameMap[K] {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(props)) {
-    if (v === undefined || v === null || v === false) continue;
-    if (k.startsWith('on') && typeof v === 'function') {
-      el.addEventListener(k.slice(2).toLowerCase(), v as EventListener);
-    } else if (k === 'class') {
-      el.className = String(v);
-    } else if (k in el) {
-      (el as unknown as Record<string, unknown>)[k] = v;
-    } else {
-      el.setAttribute(k, String(v));
-    }
-  }
-  for (const c of children) {
-    if (c !== null && c !== undefined && c !== false) el.append(c);
-  }
-  return el;
-}
-
-const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
-
-function clear(el: HTMLElement): void {
-  while (el.firstChild) el.removeChild(el.firstChild);
-}
 
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
@@ -99,6 +70,7 @@ function renderTabs(): void {
             activeTab = t.id;
             renderTabs();
             if (t.id === 'console') scrollConsoleToEnd();
+            if (t.id === 'map') showMap();
           },
         },
         t.label,
@@ -346,10 +318,9 @@ async function refreshTasks(): Promise<void> {
 
 // --- zakładka Mapa ---------------------------------------------------------
 
-function renderMap(): void {
-  const view = $('view-map');
-  clear(view);
-  view.append(h('div', { class: 'placeholder' }, 'Widok mapy zostanie dodany później.'));
+async function refreshMap(): Promise<void> {
+  setMapBusy(await ve.isMapIndexing());
+  setMapData(await ve.getMapOverview());
 }
 
 // --- zakładka Konsola ------------------------------------------------------
@@ -620,7 +591,12 @@ async function openSettings(forced: boolean): Promise<void> {
 
 async function init(): Promise<void> {
   renderTabs();
-  renderMap();
+  mountMap($('view-map'), {
+    rescan: async () => {
+      const res = await ve.reindexMap();
+      if (!res.ok) alert(res.error ?? 'Nie udało się przeskanować mapy.');
+    },
+  });
   renderConsole();
 
   document.addEventListener('click', () => {
@@ -635,11 +611,13 @@ async function init(): Promise<void> {
   });
   ve.onTasksChanged(() => void refreshTasks());
   ve.onOpenSettings(() => void openSettings(false));
+  ve.onMapChanged(() => void refreshMap());
 
   consoleLines = await ve.getConsoleHistory();
   fillConsole();
   run = await ve.getRunState();
   await refreshTasks();
+  await refreshMap();
 
   const settings = await ve.getSettings();
   if (!settings.configured) await openSettings(true);

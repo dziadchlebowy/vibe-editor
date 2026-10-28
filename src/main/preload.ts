@@ -22,6 +22,10 @@ const api: VeApi = {
   resumeRun: () => ipcRenderer.invoke('run:resume'),
   getRunState: () => ipcRenderer.invoke('run:state'),
 
+  getMapOverview: () => ipcRenderer.invoke('map:overview'),
+  reindexMap: () => ipcRenderer.invoke('map:reindex'),
+  isMapIndexing: () => ipcRenderer.invoke('map:indexing'),
+
   getConsoleHistory: () => ipcRenderer.invoke('console:history'),
 
   onConsoleLine: (cb) => {
@@ -32,6 +36,9 @@ const api: VeApi = {
   },
   onTasksChanged: (cb) => {
     ipcRenderer.on('tasks:changed', () => cb());
+  },
+  onMapChanged: (cb) => {
+    ipcRenderer.on('map:changed', () => cb());
   },
   onOpenSettings: (cb) => {
     ipcRenderer.on('ui:openSettings', () => cb());

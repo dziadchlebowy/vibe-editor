@@ -216,3 +216,36 @@ hr.sep { width: 100%; border: 0; border-top: 1px solid var(--border); margin: 4p
 .status.ok { color: var(--ok); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .hint { color: var(--muted); font-size: 12px; }
+
+/* mapa */
+.map-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0f1115;
+}
+.map-canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; display: block; }
+.map-canvas.dragging { cursor: grabbing; }
+.map-info {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: min(320px, calc(100% - 20px));
+  background: rgba(30, 33, 40, .94);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  pointer-events: none;
+}
+.map-info-title { font-weight: 700; margin-bottom: 6px; }
+.map-info-row { display: flex; gap: 10px; justify-content: space-between; padding: 1px 0; }
+.map-info-row .k { color: var(--muted); flex-shrink: 0; }
+.map-info-row .v { text-align: right; word-break: break-all; }
+.map-info-row .v.bad { color: var(--danger); }
+.map-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; padding: 24px; pointer-events: none; }
+.map-empty[hidden] { display: none; }
+.map-hint { position: absolute; left: 10px; bottom: 8px; color: var(--muted); font-size: 12px; pointer-events: none; }

@@ -84,3 +84,24 @@ export interface RunState {
   error?: string;
   taskIds: string[];
 }
+
+export interface MapTileView {
+  x: number;
+  y: number;
+  /** Plik .map kafla, względem folderu mapy. */
+  file: string;
+  exists: boolean;
+  /** Liczba unikatowych ścieżek assetów użytych na kaflu. */
+  assetCount: number;
+  /** Ile z nich nie istnieje w folderze OMSI. */
+  missingCount: number;
+}
+
+export interface MapOverview {
+  mapFolder: string;
+  tiles: MapTileView[];
+  /** Liczba unikatowych assetów na całej mapie. */
+  assetCount: number;
+  missingCount: number;
+  indexedAt: number;
+}

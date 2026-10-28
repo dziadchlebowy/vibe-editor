@@ -78,6 +78,24 @@ export interface SetupOptions {
 }
 
 /**
+ * Kopie assetów z OMSI (_vibe/assets) są lokalnym cache'em dla Claude — nie wchodzą do repo
+ * (rozmiar, cudze prawa autorskie). Wyłączenie jest lokalne (.git/info/exclude), nie pushowane.
+ */
+function excludeAssets(workDir: string): void {
+  const file = path.join(workDir, '.git', 'info', 'exclude');
+  const rule = '_vibe/assets/';
+  let current = '';
+  try {
+    current = fs.readFileSync(file, 'utf-8');
+  } catch {
+    /* brak pliku */
+  }
+  if (current.split(/\r?\n/).includes(rule)) return;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, current + (current && !current.endsWith('\n') ? '\n' : '') + rule + '\n');
+}
+
+/**
  * Podpina folder roboczy pod repo, przełącza na właściwą gałąź i pushuje całość.
  * Procedura jest idempotentna — można ją uruchamiać ponownie po zmianie ustawień.
  */
@@ -87,6 +105,7 @@ export async function setupRepo(git: GitRunner, o: SetupOptions): Promise<void> 
   if (!fs.existsSync(path.join(o.workDir, '.git'))) {
     await git.run(['init']);
   }
+  excludeAssets(o.workDir);
   await git.run(['config', 'core.autocrlf', 'false']);
   await git.run(['config', 'core.longpaths', 'true']);
 

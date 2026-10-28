@@ -72,7 +72,7 @@ export function encodeCfg(text: string, encoding: CfgEncoding, bom: boolean): Bu
 
 // --- parsowanie ------------------------------------------------------------
 
-interface Section {
+export interface Section {
   marker: string;
   /** Indeks linii ze znacznikiem. */
   start: number;
@@ -84,11 +84,11 @@ function detectEol(text: string): string {
   return text.includes('\r\n') ? '\r\n' : '\n';
 }
 
-function splitLines(text: string): string[] {
+export function splitLines(text: string): string[] {
   return text.split(/\r\n|\n|\r/);
 }
 
-function findSections(lines: string[]): Section[] {
+export function findSections(lines: string[]): Section[] {
   const starts: { marker: string; start: number }[] = [];
   lines.forEach((line, i) => {
     const m = MARKER.exec(line);
@@ -181,7 +181,7 @@ export function applyGlobalInfo(text: string, info: GlobalInfo): string {
 
 // --- system plików ---------------------------------------------------------
 
-function findCfgFile(dir: string): string | null {
+export function findCfgFile(dir: string): string | null {
   let entries: string[];
   try {
     entries = fs.readdirSync(dir);
