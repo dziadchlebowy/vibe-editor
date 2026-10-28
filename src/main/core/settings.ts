@@ -8,7 +8,10 @@ export const DEFAULT_SETTINGS: Settings = {
   mapFolder: '',
   remoteUrl: '',
   workOnMain: false,
+  claudeMode: 'code',
   claudePath: '',
+  claudeChatUrl: '',
+  claudeAutoEnter: false,
   configured: false,
 };
 

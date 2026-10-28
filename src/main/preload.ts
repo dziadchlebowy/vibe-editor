@@ -15,6 +15,7 @@ const api: VeApi = {
   addTask: (input) => ipcRenderer.invoke('tasks:add', input),
   updateTask: (id, input) => ipcRenderer.invoke('tasks:update', id, input),
   deleteTask: (id) => ipcRenderer.invoke('tasks:delete', id),
+  resolveTask: (id) => ipcRenderer.invoke('tasks:resolve', id),
   setTaskChecked: (id, checked) => ipcRenderer.invoke('tasks:setChecked', id, checked),
 
   startRun: (ids) => ipcRenderer.invoke('run:start', ids),
@@ -25,6 +26,7 @@ const api: VeApi = {
   getMapOverview: () => ipcRenderer.invoke('map:overview'),
   reindexMap: () => ipcRenderer.invoke('map:reindex'),
   isMapIndexing: () => ipcRenderer.invoke('map:indexing'),
+  getCatalog: () => ipcRenderer.invoke('map:catalog'),
 
   getConsoleHistory: () => ipcRenderer.invoke('console:history'),
 

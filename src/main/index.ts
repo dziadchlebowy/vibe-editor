@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu } from 'electron';
 import { exec, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,8 +14,10 @@ import type {
 import { ClaudeRunner } from './core/claude.ts';
 import type { Emit } from './core/emit.ts';
 import { findMapFolders, writeMapInfo } from './core/globalCfg.ts';
-import { GitRunner, setupRepo } from './core/git.ts';
-import { assetsDir, buildMapIndex, loadMapIndex, toOverview } from './core/mapIndex.ts';
+import { parseChatLink, sendToClaudeFree } from './core/claudeFree.ts';
+import { applyFailed, clearFailed, writeLastRun } from './core/failed.ts';
+import { GitRunner, setupRepo, syncToRemote } from './core/git.ts';
+import { assetsDir, buildMapIndex, loadMapIndex, toCatalog, toOverview } from './core/mapIndex.ts';
 import { buildPrompt, writePromptFile } from './core/promptBuilder.ts';
 import { loadSettings, saveSettings, targetBranch, vibeDir } from './core/settings.ts';
 import { TaskStore } from './core/tasks.ts';
@@ -96,7 +98,7 @@ function inspectWorkDir(dir: string): InspectResult {
     return {
       ok: false,
       error:
-        'W tym folderze nie znaleziono folderu mapy OMSI (brak podfolderu z plikiem global.cfg zaczynającym się od znaczników [name], [friendlyname], [description]).',
+        'W tym folderze nie znaleziono folderu mapy OMSI (brak podfolderu z plikiem global.cfg zawierającym znaczniki [name], [friendlyname] i [description]).',
       maps: [],
     };
   }
@@ -119,6 +121,11 @@ async function saveAll(req: SaveRequest): Promise<OkResult> {
   if (!req.name.trim() || !req.friendlyname.trim()) return fail('Pola „nazwa” i „friendlyname” nie mogą być puste.');
   if (!/^(https?:\/\/|git@|ssh:\/\/)/i.test(remoteUrl)) {
     return fail('Podaj link do repozytorium na GitHubie (np. https://github.com/użytkownik/repo.git).');
+  }
+
+  const claudeMode = req.claudeMode === 'free' ? 'free' : 'code';
+  if (claudeMode === 'free' && !parseChatLink(req.claudeChatUrl)) {
+    return fail('Claude Free: podaj poprawny link czatu (np. https://claude.ai/chat/ID-CZATU).');
   }
 
   saving = true;
@@ -153,7 +160,10 @@ async function saveAll(req: SaveRequest): Promise<OkResult> {
       mapFolder: map.folder,
       remoteUrl,
       workOnMain: req.workOnMain,
+      claudeMode,
       claudePath: req.claudePath.trim(),
+      claudeChatUrl: req.claudeChatUrl.trim(),
+      claudeAutoEnter: !!req.claudeAutoEnter,
       configured: true,
     };
     saveSettings(settingsFile(), settings);
@@ -199,6 +209,19 @@ function openClaudeLogin(claudePath: string): void {
     emit('app', 'Otwarto terminal Claude. Jeśli nie jesteś zalogowany, wpisz w nim /login.');
   } else {
     emit('app', `Zaloguj się w terminalu poleceniem: ${cmd} (a w nim /login).`);
+  }
+}
+
+/** Wczytuje _vibe/failed.ve (jeśli jest) i przenosi wskazane zadania do „Odrzuconych”. */
+function applyFailedNow(stableMs: number): void {
+  const store = taskStore();
+  if (!store || !settings.workDir) return;
+  try {
+    if (applyFailed(vibeDir(settings.workDir), store, emit, { stableMs }) !== null) {
+      win?.webContents.send('tasks:changed');
+    }
+  } catch (e) {
+    emit('app', `Błąd odczytu failed.ve: ${errMsg(e)}`);
   }
 }
 
@@ -258,6 +281,7 @@ function registerIpc(): void {
     }
   });
   ipcMain.handle('tasks:delete', (_e, id: string) => taskStore()?.remove(id));
+  ipcMain.handle('tasks:resolve', (_e, id: string) => taskStore()?.resolve(id));
   ipcMain.handle('tasks:setChecked', (_e, id: string, checked: boolean) => taskStore()?.setChecked(id, checked));
 
   ipcMain.handle('run:start', (_e, ids: string[]): OkResult => {
@@ -266,16 +290,43 @@ function registerIpc(): void {
     if (indexing) return fail('Trwa indeksowanie mapy i kopiowanie assetów — poczekaj na zakończenie.');
     const tasks = store.list().filter((t) => t.status === 'active' && ids.includes(t.id));
     if (tasks.length === 0) return fail('Zaznacz co najmniej jedno zadanie.');
+    const free = settings.claudeMode === 'free';
+    const chatUrl = free ? parseChatLink(settings.claudeChatUrl) : null;
+    if (free && !chatUrl) return fail('Claude Free: wpisz poprawny link czatu w ustawieniach (https://claude.ai/chat/ID-CZATU).');
+
+    const taskIds = tasks.map((t) => t.id);
+    const branch = targetBranch(settings);
+    const vibe = vibeDir(settings.workDir);
+    const text = buildPrompt(tasks, {
+      mapName: currentMap()?.name ?? settings.mapFolder,
+      mapFolder: settings.mapFolder,
+      repoUrl: settings.remoteUrl,
+      branch,
+      hasAssets: fs.existsSync(assetsDir(settings.workDir)),
+    });
+
+    // Przed każdym uruchomieniem folder roboczy musi być w aktualnej wersji wypchnięty do repo.
+    const prepare = async (): Promise<void> => {
+      emit('app', `Sprawdzam, czy folder roboczy jest wypchnięty do repozytorium (gałąź ${branch})…`);
+      const r = await syncToRemote(new GitRunner(settings.workDir, emit), { branch, remoteUrl: settings.remoteUrl });
+      emit('app', r.committed ? `Wypchnięto aktualne zmiany (${r.commit.slice(0, 7)}).` : `Repozytorium jest aktualne (${r.commit.slice(0, 7)}).`);
+      fs.mkdirSync(path.join(vibe, 'inspirations'), { recursive: true });
+      clearFailed(vibe);
+      writeLastRun(vibe, taskIds);
+      emit('app', `Zapisano prompt: ${writePromptFile(vibe, text)}`);
+    };
+
     try {
-      const map = currentMap();
-      const text = buildPrompt(tasks, {
-        mapName: map?.name ?? settings.mapFolder,
-        mapFolder: settings.mapFolder,
-        hasAssets: fs.existsSync(assetsDir(settings.workDir)),
-      });
-      const file = writePromptFile(vibeDir(settings.workDir), text);
-      emit('app', `Zapisano prompt: ${file}`);
-      runner.start(text, tasks.map((t) => t.id));
+      if (free) {
+        runner.startJob(taskIds, async (signal) => {
+          await prepare();
+          clipboard.writeText(text);
+          emit('claude', 'Prompt skopiowany do schowka.');
+          await sendToClaudeFree({ url: chatUrl!, autoEnter: settings.claudeAutoEnter, emit, signal });
+        });
+      } else {
+        runner.start(text, taskIds, prepare);
+      }
       return { ok: true };
     } catch (e) {
       return fail(errMsg(e));
@@ -298,6 +349,10 @@ function registerIpc(): void {
   });
   ipcMain.handle('map:reindex', () => runIndex());
   ipcMain.handle('map:indexing', () => indexing);
+  ipcMain.handle('map:catalog', () => {
+    const idx = settings.workDir ? loadMapIndex(settings.workDir) : null;
+    return idx && idx.mapFolder === settings.mapFolder ? toCatalog(idx) : { roads: [], objects: [] };
+  });
 
   ipcMain.handle('console:history', () => consoleBuffer);
 }
@@ -336,6 +391,7 @@ if (!app.requestSingleInstanceLock()) {
       emit,
       onSuccess: (ids) => {
         taskStore()?.archive(ids);
+        applyFailedNow(0); // zadania zgłoszone przez Claude w _vibe/failed.ve → „Odrzucone”
         win?.webContents.send('tasks:changed');
       },
     });
@@ -345,6 +401,14 @@ if (!app.requestSingleInstanceLock()) {
     buildMenu();
     createWindow();
     emit('app', 'VibeEditor uruchomiony.');
+    // Claude Free nie daje sygnału końca pracy, więc failed.ve (gdy się pojawi) łapiemy okresowo
+    setInterval(() => {
+      if (settings.configured && runner.state.status !== 'running') applyFailedNow(2000);
+    }, 3000);
+    // stary lub brakujący indeks (np. po aktualizacji aplikacji) odbudowujemy automatycznie
+    if (settings.configured && settings.workDir && settings.mapFolder && !loadMapIndex(settings.workDir)) {
+      void runIndex();
+    }
   });
 
   app.on('window-all-closed', () => {

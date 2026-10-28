@@ -30,7 +30,7 @@ Instalator budowany przez `npm run dist` ma w manifeście `requireAdministrator`
   _vibe/              ← tworzony przez VibeEditor: zadania (tasks.json), prompty (prompts/), assety
 ```
 
-Folder bez takiego `global.cfg` nie może zostać wybrany jako roboczy.
+Folder bez takiego `global.cfg` nie może zostać wybrany jako roboczy. Znaczniki `[name]`, `[friendlyname]`, `[description]` mogą stać w dowolnym miejscu pliku i w dowolnej kolejności — liczy się to, co jest pod nimi. Tak samo w plikach `.map` i `.sco`: czytamy to, co leży pod znacznikami, bez względu na to, czym plik się zaczyna.
 
 ## Konfiguracja (pierwsze uruchomienie i Ustawienia)
 
@@ -51,18 +51,31 @@ Za każdym razem, gdy podłączany jest nowy folder roboczy (zmiana folderu, map
 
 Do promptu dla Claude dopisywana jest krótka notka, że dokładne dane o splinach i obiektach są w `_vibe/assets/` (Claude szuka w nich Globem/Grepem zamiast dostawać je w prompcie).
 
-## Zakładka Mapa
+## Zakładki
 
-Przesuwalna i zoomowalna siatka kafli (przeciąganie, kółko myszy względem kursora), start wycentrowany na środku mapy. Klik w kafel pokazuje w prawym górnym rogu: koordynaty, plik `.map`, czy plik istnieje, liczbę unikatowych assetów i ile z nich brakuje w OMSI.
+- **Zadania** — lista zadań (Aktywne / Odrzucone / Archiwum), „+ Dodaj”, „▶️ Uruchom”, „⏹️ Zatrzymaj”.
+- **Mapa** — przesuwalna i zoomowalna siatka kafli, start wycentrowany na środku mapy. Klik w kafel pokazuje w prawym górnym rogu koordynaty, plik `.map`, liczbę assetów i brakujące w OMSI. „📍 Dodaj pinezkę”: w tym trybie klik w punkt mapy otwiera nowe zadanie z tą pinezką; pinezki zadań (aktywnych i odrzuconych) są rysowane na mapie, klik w pinezkę pokazuje tytuł zadania.
+- **Jezdnie** — lista wszystkich wczytanych splinów (`[spline]`, `[spline_h]`) po ścieżce, z filtrem. Dwuklik tworzy nowe zadanie z podpiętą jezdnią.
+- **Obiekty** — drzewo obiektów z plików `.sco`: `[groups]` (liczba, a pod nią nazwy „folderów” od korzenia) i `[friendlyname]` (np. `📂 Aachen › 📂 Gruen › 🏠 Busch`). Dwuklik tworzy nowe zadanie z podpiętym obiektem.
+- **Konsola** — output Gita i Claude (filtr: wszystko / tylko Git / tylko Claude).
 
 ## Zadania
 
-- Zadanie = tytuł + treść + (w przyszłości) zakres kafli. Rodzaje zadań są polimorficzne — rejestr w `src/shared/taskTypes.ts`; treść jest generowana algorytmicznie z danych formularza (dla „zwykłego tekstowego” to po prostu wpisany tekst).
-- „▶️ Uruchom” składa zaznaczone zadania w jeden plik (`_vibe/prompts/prompt-*.md`) i wysyła do Claude Code (`claude -p`, tryb `acceptEdits`).
-- Po sukcesie zadania trafiają do **Archiwum**. „⏹️ Zatrzymaj” przerywa pracę.
-- Po wyczerpaniu limitu przycisk zmienia się na „⏸️Wznów od HH:MM”; wznowienie kontynuuje tę samą sesję Claude.
+- Zadanie = tytuł + treść (z rodzaju zadania; rejestr w `src/shared/taskTypes.ts`) + opcjonalnie: **zakres kafli** („Dobierz kafle…” otwiera mapkę do zaznaczania kafli), **pinezka** („Wskaż na mapie…”) oraz **załącznik** — jezdnia albo obiekt wybrany z listy tego, co jest na mapie (nieistniejących assetów nie da się podpiąć).
+- **Przed każdym „Uruchom”** aplikacja upewnia się, że folder roboczy jest w aktualnej wersji wypchnięty do repo: commit zmian (jeśli są), push na gałąź z ustawień i sprawdzenie, że zdalna gałąź wskazuje ten sam commit. Przy rozjechaniu historii zgłasza błąd (nic nie nadpisuje).
+- „▶️ Uruchom” składa zaznaczone zadania w jeden prompt (`_vibe/prompts/prompt-*.md`). Prompt zawiera: link do repo i gałąź, na którą Claude ma zpushować zmiany, **ponumerowane zadania** (z kafelkami, pinezką i załącznikiem), zasady edycji oraz protokół niewykonalnych zadań.
+- **Zasady edycji dla Claude:** wolno mu zmieniać TYLKO folder mapy, `_vibe/inspirations/` (zwięzłe notatki) i `_vibe/failed.ve`. Zakaz ruszania `_vibe/assets/` i zmyślania nieistniejących assetów. W trybie Claude Code dodatkowo przekazywane są reguły `--disallowedTools` blokujące edycję plików aplikacji (`_vibe/assets`, `_vibe/prompts`, `tasks.json`, `map-index.json`, `.git`).
+- **Niewykonalne zadania:** Claude wpisuje w `_vibe/failed.ve` linijki `<numer>: <krótki powód>`. Aplikacja wczytuje ten plik (po zakończeniu pracy Claude Code, a w trybie Free okresowo) i przenosi wskazane zadania do kategorii **Odrzucone** z komentarzem. „☑️ Rozwiązane” zwraca zadanie do Aktywnych.
+- Po sukcesie pozostałe zadania trafiają do **Archiwum**. „⏹️ Zatrzymaj” przerywa pracę (także w trakcie synchronizacji z repo).
+- Po wyczerpaniu limitu (Claude Code) przycisk zmienia się na „⏸️Wznów od HH:MM”; wznowienie kontynuuje tę samą sesję Claude.
+
+## Claude Code vs Claude Free (Ustawienia)
+
+- **Claude Code** — aplikacja uruchamia `claude -p` w folderze roboczym (tryb `acceptEdits`), pokazuje output w konsoli, wykrywa limit i wznawia sesję.
+- **Claude Free** — pole na link czatu (`https://claude.ai/chat/ID`). Po „Uruchom” prompt trafia do schowka, aplikacja odpala `claude://claude.ai/chat/ID` (PowerShell `Start-Process`), po ok. 1,5 s wciska Ctrl+V, a Ty zatwierdzasz Enterem — albo robi to sama, gdy zaznaczysz „Po wklejeniu sam naciśnij Enter”. Tylko Windows. Aplikacja nie widzi, kiedy Claude skończy, więc zadania trafiają do Archiwum od razu po wklejeniu.
+
+Pinezka jest zapisana w jednostkach kafli (środek kafla (x, y) to dokładnie (x, y), oś Y rośnie na północ); w prompcie przeliczana jest na przesunięcie od środka kafla w metrach przy założeniu kafla 300×300 m.
 
 ## Do zrobienia
 
-- Zakres kafli w zadaniach (placeholder jest w UI i modelu; siatka mapy już istnieje).
 - Kolejne rodzaje zadań.

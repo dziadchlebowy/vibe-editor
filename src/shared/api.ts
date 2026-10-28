@@ -1,6 +1,7 @@
 import type {
   ConsoleLine,
   InspectResult,
+  MapCatalog,
   MapOverview,
   OkResult,
   RunState,
@@ -24,6 +25,8 @@ export interface VeApi {
   addTask(input: TaskInput): Promise<OkResult>;
   updateTask(id: string, input: TaskInput): Promise<OkResult>;
   deleteTask(id: string): Promise<void>;
+  /** „☑️ Rozwiązane”: odrzucone zadanie wraca do aktywnych. */
+  resolveTask(id: string): Promise<void>;
   setTaskChecked(id: string, checked: boolean): Promise<void>;
 
   startRun(taskIds: string[]): Promise<OkResult>;
@@ -34,6 +37,7 @@ export interface VeApi {
   getMapOverview(): Promise<MapOverview | null>;
   reindexMap(): Promise<OkResult>;
   isMapIndexing(): Promise<boolean>;
+  getCatalog(): Promise<MapCatalog>;
 
   getConsoleHistory(): Promise<ConsoleLine[]>;
 

@@ -249,3 +249,54 @@ hr.sep { width: 100%; border: 0; border-top: 1px solid var(--border); margin: 4p
 .map-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; padding: 24px; pointer-events: none; }
 .map-empty[hidden] { display: none; }
 .map-hint { position: absolute; left: 10px; bottom: 8px; color: var(--muted); font-size: 12px; pointer-events: none; }
+
+/* elementy dodane z zakładkami Jezdnie/Obiekty, pinezkami i kategorią Odrzucone */
+[hidden] { display: none !important; }
+.btn.active { border-color: var(--accent); background: #26324d; }
+.chip.alert { border-color: var(--danger); color: var(--danger); }
+.task.rejected { border-color: var(--danger); }
+.task-reject {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-left: 3px solid var(--danger);
+  background: rgba(229, 100, 107, .08);
+  border-radius: 4px;
+  white-space: pre-wrap;
+}
+.task-reject .ts { color: var(--muted); font-size: 12px; }
+.row.center { align-items: center; flex-wrap: wrap; }
+.radios { display: flex; gap: 20px; }
+.modal.wide { width: min(980px, calc(100vw - 32px)); }
+.picker-grid { height: min(58vh, 560px); display: flex; }
+.picker-grid .map-wrap { flex: 1; }
+.badge.bad { color: var(--danger); border-color: var(--danger); }
+
+.asset-list, .asset-tree {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+}
+.asset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: default;
+  user-select: none;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 28px;
+}
+.asset-row:hover { background: var(--panel-2); }
+.asset-row.sel { background: #26324d; }
+.asset-row.missing .asset-path { color: var(--danger); }
+.asset-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.asset-sub { color: var(--muted); font-size: 12px; }
+.tree-folder > summary { cursor: pointer; padding: 3px 6px; border-radius: 4px; user-select: none; }
+.tree-folder > summary:hover { background: var(--panel-2); }
+.tree-children { margin-left: 18px; border-left: 1px dashed var(--border); padding-left: 6px; }
+.toolbar .status { white-space: nowrap; }

@@ -22,7 +22,6 @@ export interface DecodedCfg {
 }
 
 const MARKER = /^\s*\[([^\]\r\n]+)\]\s*$/;
-const REQUIRED_ORDER = ['name', 'friendlyname', 'description'];
 
 // --- kodowanie -------------------------------------------------------------
 
@@ -115,14 +114,18 @@ export function findSections(lines: string[]): Section[] {
   }));
 }
 
-/** Czy plik zaczyna się od znaczników [name], [friendlyname], [description] (w tej kolejności)? */
-function isMapCfg(lines: string[], sections: Section[]): boolean {
-  if (sections.length < REQUIRED_ORDER.length) return false;
-  // przed pierwszym znacznikiem nie może być żadnej treści
-  for (let i = 0; i < sections[0].start; i++) {
-    if (lines[i].trim() !== '') return false;
-  }
-  return REQUIRED_ORDER.every((m, i) => sections[i].marker === m);
+interface MapSections {
+  name: Section;
+  friendly: Section;
+  desc: Section;
+}
+
+/** Znajduje (pierwsze wystąpienia) znaczników [name], [friendlyname], [description] — w dowolnym miejscu pliku. */
+function locateMapSections(sections: Section[]): MapSections | null {
+  const name = sections.find((s) => s.marker === 'name');
+  const friendly = sections.find((s) => s.marker === 'friendlyname');
+  const desc = sections.find((s) => s.marker === 'description');
+  return name && friendly && desc ? { name, friendly, desc } : null;
 }
 
 function sectionBody(lines: string[], s: Section): string[] {
@@ -132,65 +135,61 @@ function sectionBody(lines: string[], s: Section): string[] {
   return body;
 }
 
-/** Zwraca dane mapy albo null, jeśli tekst nie wygląda na global.cfg mapy. */
+/** Zwraca dane mapy albo null, jeśli w tekście brakuje któregoś ze znaczników. */
 export function parseGlobalCfg(text: string): GlobalInfo | null {
   const lines = splitLines(text);
-  const sections = findSections(lines);
-  if (!isMapCfg(lines, sections)) return null;
-  const [name, friendly, desc] = sections;
+  const found = locateMapSections(findSections(lines));
+  if (!found) return null;
   return {
-    name: (sectionBody(lines, name)[0] ?? '').trim(),
-    friendlyname: (sectionBody(lines, friendly)[0] ?? '').trim(),
-    description: sectionBody(lines, desc).join('\n'),
+    name: (sectionBody(lines, found.name)[0] ?? '').trim(),
+    friendlyname: (sectionBody(lines, found.friendly)[0] ?? '').trim(),
+    description: sectionBody(lines, found.desc).join('\n'),
   };
 }
 
 const oneLine = (s: string): string => s.replace(/\s*[\r\n]+\s*/g, ' ').trim();
 
-/** Podmienia treść trzech pierwszych sekcji, resztę pliku zostawia bez zmian. */
+/**
+ * Podmienia treść sekcji [name], [friendlyname], [description] (gdziekolwiek stoją w pliku).
+ * Sekcje, których wartość się nie zmieniła, i cała reszta pliku zostają bez zmian.
+ */
 export function applyGlobalInfo(text: string, info: GlobalInfo): string {
   const eol = detectEol(text);
   const lines = splitLines(text);
-  const sections = findSections(lines);
-  if (!isMapCfg(lines, sections)) return text;
+  const found = locateMapSections(findSections(lines));
+  if (!found) return text;
+  const current = parseGlobalCfg(text)!;
 
-  const head = lines.slice(0, sections[0].start);
-  const rest = lines.slice(sections[2].end);
   const descLines = info.description.split(/\r\n|\n|\r/);
   while (descLines.length && descLines[descLines.length - 1].trim() === '') descLines.pop();
 
-  // Zachowujemy oryginalne puste linie wokół treści każdej sekcji, żeby zapis bez zmian
-  // nie modyfikował pliku.
-  const blank = (n: number): string[] => Array<string>(n).fill('');
-  const leading = (s: Section): number => {
-    let n = 0;
-    for (let i = s.start + 1; i < s.end && lines[i].trim() === ''; i++) n++;
-    return n;
-  };
-  const trailing = (s: Section): number => {
-    let n = 0;
-    for (let i = s.end - 1; i > s.start && lines[i].trim() === ''; i--) n++;
-    return n;
-  };
-  const [sName, sFriendly, sDesc] = sections;
-
-  const out = [
-    ...head,
-    lines[sName.start],
-    ...blank(leading(sName)),
-    oneLine(info.name),
-    ...blank(trailing(sName)),
-    lines[sFriendly.start],
-    ...blank(leading(sFriendly)),
-    oneLine(info.friendlyname),
-    ...blank(trailing(sFriendly)),
-    lines[sDesc.start],
-    ...blank(leading(sDesc)),
-    ...descLines,
-    ...blank(trailing(sDesc)),
-    ...rest,
+  const jobs: { section: Section; content: string[]; changed: boolean }[] = [
+    { section: found.name, content: [oneLine(info.name)], changed: oneLine(info.name) !== current.name },
+    {
+      section: found.friendly,
+      content: [oneLine(info.friendlyname)],
+      changed: oneLine(info.friendlyname) !== current.friendlyname,
+    },
+    {
+      section: found.desc,
+      content: descLines,
+      changed: descLines.join('\n') !== current.description,
+    },
   ];
-  return out.join(eol);
+
+  // od końca pliku, żeby wcześniejsze indeksy się nie przesuwały
+  jobs.sort((x, y) => y.section.start - x.section.start);
+  for (const { section, content, changed } of jobs) {
+    if (!changed) continue;
+    const body = lines.slice(section.start + 1, section.end);
+    let lead = 0;
+    while (lead < body.length && body[lead].trim() === '') lead++;
+    let trail = 0;
+    while (lead < body.length && trail < body.length - lead && body[body.length - 1 - trail].trim() === '') trail++;
+    const blank = (n: number): string[] => Array<string>(n).fill('');
+    lines.splice(section.start + 1, body.length, ...blank(lead), ...content, ...blank(trail));
+  }
+  return lines.join(eol);
 }
 
 // --- system plików ---------------------------------------------------------

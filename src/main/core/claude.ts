@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import type { RunState } from '../../shared/types.ts';
 import type { Emit } from './emit.ts';
+import { disallowedToolsArg } from './permissions.ts';
 import { FALLBACK_RESET_MS, detectRateLimit } from './rateLimit.ts';
 
 export interface RunnerOptions {
@@ -41,6 +42,27 @@ export function formatEvent(obj: Json): string | null {
   }
 }
 
+/** Argumenty `claude` w trybie nieinteraktywnym (prompt idzie przez stdin). */
+export function buildClaudeArgs(resumeId: string | null): string[] {
+  const args = [
+    '-p',
+    '--output-format',
+    'stream-json',
+    '--verbose',
+    '--permission-mode',
+    'acceptEdits',
+    '--disallowedTools',
+    disallowedToolsArg(),
+  ];
+  if (resumeId) args.push('--resume', resumeId);
+  return args;
+}
+
+/** Cudzysłów dla cmd.exe (spawn z shell: true na Windows). */
+export function quoteForCmd(arg: string): string {
+  return /^[\w./:=-]+$/.test(arg) ? arg : `"${arg.replace(/"/g, '\\"')}"`;
+}
+
 export class ClaudeRunner extends EventEmitter {
   state: RunState = { status: 'idle', taskIds: [] };
 
@@ -49,6 +71,7 @@ export class ClaudeRunner extends EventEmitter {
   private sessionId: string | null = null;
   private promptText = '';
   private stopping = false;
+  private abort: AbortController | null = null;
 
   private resultText = '';
   private resultIsError = false;
@@ -60,12 +83,35 @@ export class ClaudeRunner extends EventEmitter {
     this.opts = opts;
   }
 
-  start(promptText: string, taskIds: string[]): void {
+  /**
+   * Uruchamia prompt. Opcjonalne `prepare` (np. synchronizacja z repo) wykonuje się przed procesem Claude,
+   * a w tym czasie przycisk już pokazuje „W toku…”; błąd lub zatrzymanie przerywają start.
+   */
+  start(promptText: string, taskIds: string[], prepare?: (signal: AbortSignal) => Promise<void>): void {
     if (this.state.status !== 'idle') throw new Error('Prompt jest już w toku.');
     this.promptText = promptText;
     this.sessionId = null;
     this.setState({ status: 'running', taskIds });
-    this.launch(promptText, null);
+    if (!prepare) {
+      this.launch(promptText, null);
+      return;
+    }
+    const ac = new AbortController();
+    this.abort = ac;
+    prepare(ac.signal).then(
+      () => {
+        if (this.abort !== ac) return; // zatrzymane w trakcie przygotowania
+        this.abort = null;
+        this.launch(promptText, null);
+      },
+      (err: unknown) => {
+        if (this.abort !== ac) return;
+        this.abort = null;
+        const msg = err instanceof Error ? err.message : String(err);
+        this.opts.emit('claude', `Nie uruchomiono: ${msg}`);
+        this.setState({ status: 'idle', taskIds: [], error: msg });
+      },
+    );
   }
 
   resume(): void {
@@ -76,7 +122,38 @@ export class ClaudeRunner extends EventEmitter {
     else this.launch(this.promptText, null);
   }
 
+  /** Zadanie bez procesu Claude (np. wklejenie do aplikacji Claude w trybie Free). Po sukcesie zadania idą do archiwum. */
+  startJob(taskIds: string[], job: (signal: AbortSignal) => Promise<void>): void {
+    if (this.state.status !== 'idle') throw new Error('Prompt jest już w toku.');
+    const ac = new AbortController();
+    this.abort = ac;
+    this.setState({ status: 'running', taskIds });
+    job(ac.signal).then(
+      () => {
+        if (this.abort !== ac) return; // zatrzymane
+        this.abort = null;
+        this.opts.onSuccess(taskIds);
+        this.setState({ status: 'idle', taskIds: [] });
+      },
+      (err: unknown) => {
+        if (this.abort !== ac) return;
+        this.abort = null;
+        const msg = err instanceof Error ? err.message : String(err);
+        this.opts.emit('claude', `Błąd: ${msg}`);
+        this.setState({ status: 'idle', taskIds: [], error: msg });
+      },
+    );
+  }
+
   stop(): void {
+    if (this.abort) {
+      const ac = this.abort;
+      this.abort = null;
+      ac.abort();
+      this.opts.emit('claude', 'Zatrzymano.');
+      this.setState({ status: 'idle', taskIds: [] });
+      return;
+    }
     if (this.state.status === 'idle') return;
     if (!this.child) {
       // pauza (limit) — nic nie działa, po prostu rezygnujemy
@@ -106,8 +183,7 @@ export class ClaudeRunner extends EventEmitter {
     this.stopping = false;
 
     const claude = this.opts.getClaudePath().trim() || 'claude';
-    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits'];
-    if (resumeId) args.push('--resume', resumeId);
+    const args = buildClaudeArgs(resumeId);
 
     this.opts.emit('claude', `$ claude ${args.join(' ')}`);
 
@@ -115,7 +191,7 @@ export class ClaudeRunner extends EventEmitter {
     // Na Windows claude to zwykle claude.cmd (npm) — potrzebna powłoka. Argumenty są stałe, więc bezpiecznie.
     const child =
       process.platform === 'win32'
-        ? spawn(`"${claude}" ${args.join(' ')}`, { ...common, shell: true })
+        ? spawn(`"${claude}" ${args.map(quoteForCmd).join(' ')}`, { ...common, shell: true })
         : spawn(claude, args, common);
     this.child = child;
 

@@ -53,7 +53,7 @@ test('buildPrompt składa tytuły, treści i zapisuje plik w _vibe/prompts', () 
   const store = new TaskStore(path.join(tmp(), 'tasks.json'));
   store.add({ title: 'Jedno', kind: 'text', data: { text: 'Treść jeden' } });
   store.add({ title: 'Dwa', kind: 'text', data: { text: 'Treść dwa' } });
-  const text = buildPrompt(store.list(), { mapName: 'Warszawa 2008 [A5]', mapFolder: 'Warszawa' });
+  const text = buildPrompt(store.list(), { mapName: 'Warszawa 2008 [A5]', mapFolder: 'Warszawa', repoUrl: 'https://github.com/u/r.git', branch: 'VibeEditor' });
   assert.ok(text.includes('## Zadanie 1: Jedno'));
   assert.ok(text.includes('Treść dwa'));
   assert.ok(text.includes('Warszawa 2008 [A5]'));

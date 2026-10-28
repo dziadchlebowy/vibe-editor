@@ -100,7 +100,7 @@ function excludeAssets(workDir: string): void {
  * Procedura jest idempotentna — można ją uruchamiać ponownie po zmianie ustawień.
  */
 export async function setupRepo(git: GitRunner, o: SetupOptions): Promise<void> {
-  fs.mkdirSync(path.join(o.workDir, '_vibe'), { recursive: true });
+  fs.mkdirSync(path.join(o.workDir, '_vibe', 'inspirations'), { recursive: true });
 
   if (!fs.existsSync(path.join(o.workDir, '.git'))) {
     await git.run(['init']);
@@ -149,4 +149,49 @@ export async function setupRepo(git: GitRunner, o: SetupOptions): Promise<void> 
     await git.run(['commit', '-m', 'VibeEditor: synchronizacja folderu roboczego']);
   }
   await git.run(['push', '-u', 'origin', o.branch]);
+}
+
+export interface SyncOptions {
+  branch: string;
+  remoteUrl?: string;
+  message?: string;
+}
+
+/**
+ * Upewnia się, że folder roboczy jest w aktualnej wersji wypchnięty do repo: commit zmian (jeśli są),
+ * push na gałąź z ustawień i weryfikacja, że zdalna gałąź wskazuje dokładnie na lokalny HEAD.
+ * Nie nadpisuje historii — przy rozjechaniu się gałęzi zgłasza błąd.
+ */
+export async function syncToRemote(git: GitRunner, o: SyncOptions): Promise<{ commit: string; committed: boolean }> {
+  if (o.remoteUrl) await git.run(['remote', 'set-url', 'origin', o.remoteUrl], { allowFail: true });
+
+  const current = (await git.run(['rev-parse', '--abbrev-ref', 'HEAD'], { allowFail: true })).stdout.trim();
+  const hasCommits = (await git.run(['rev-parse', '--verify', 'HEAD'], { allowFail: true })).code === 0;
+  if (!hasCommits || current !== o.branch) {
+    await git.run(hasCommits ? ['checkout', '-B', o.branch] : ['symbolic-ref', 'HEAD', `refs/heads/${o.branch}`]);
+  }
+
+  await git.run(['add', '-A']);
+  const dirty = (await git.run(['status', '--porcelain'])).stdout.trim() !== '';
+  if (dirty) {
+    const hasEmail = (await git.run(['config', 'user.email'], { allowFail: true })).stdout.trim();
+    if (!hasEmail) {
+      await git.run(['config', 'user.email', 'vibeeditor@localhost']);
+      await git.run(['config', 'user.name', 'VibeEditor']);
+    }
+    await git.run(['commit', '-m', o.message ?? 'VibeEditor: synchronizacja przed uruchomieniem zadań']);
+  }
+
+  await git.run(['push', '-u', 'origin', o.branch]);
+
+  const local = (await git.run(['rev-parse', 'HEAD'])).stdout.trim();
+  const remoteLine = (await git.run(['ls-remote', 'origin', `refs/heads/${o.branch}`])).stdout.trim();
+  const remote = remoteLine.split(/\s+/)[0] ?? '';
+  if (remote !== local) {
+    throw new Error(
+      `Zdalna gałąź „${o.branch}” nie wskazuje na lokalną wersję folderu roboczego ` +
+        `(lokalnie ${local.slice(0, 7)}, w repo ${remote ? remote.slice(0, 7) : 'brak'}).`,
+    );
+  }
+  return { commit: local, committed: dirty };
 }

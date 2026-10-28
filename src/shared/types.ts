@@ -13,10 +13,18 @@ export interface Settings {
   mapFolder: string;
   remoteUrl: string;
   workOnMain: boolean;
+  /** „code” = Claude Code (CLI), „free” = czat w aplikacji Claude (schowek + Ctrl+V). */
+  claudeMode: ClaudeMode;
   /** Opcjonalna ścieżka do claude(.exe); puste = z PATH. */
   claudePath: string;
+  /** Link czatu dla trybu „free” (np. https://claude.ai/chat/ID). */
+  claudeChatUrl: string;
+  /** Tryb „free”: po wklejeniu sam naciśnij Enter. */
+  claudeAutoEnter: boolean;
   configured: boolean;
 }
+
+export type ClaudeMode = 'code' | 'free';
 
 export interface MapInfo {
   folder: string;
@@ -40,7 +48,10 @@ export interface SaveRequest {
   description: string;
   remoteUrl: string;
   workOnMain: boolean;
+  claudeMode: ClaudeMode;
   claudePath: string;
+  claudeChatUrl: string;
+  claudeAutoEnter: boolean;
 }
 
 export interface OkResult {
@@ -48,8 +59,28 @@ export interface OkResult {
   error?: string;
 }
 
-/** Zakres kafli — placeholder, zostanie zaimplementowany razem z zakładką Mapa. */
-export type TileRange = null;
+export interface TileCoord {
+  x: number;
+  y: number;
+}
+
+/** Zakres kafli zadania: konkretnie zaznaczone kafle (null = nie ograniczono). */
+export type TileRange = TileCoord[] | null;
+
+/** Pinezka zadania: punkt na mapie we współrzędnych kafli (środek kafla (x, y) to dokładnie (x, y); y rośnie na północ). */
+export interface TaskPin {
+  x: number;
+  y: number;
+}
+
+/** Jezdnia (spline) albo obiekt załączony do zadania. */
+export interface TaskAttachment {
+  kind: 'road' | 'object';
+  /** Ścieżka assetu względem folderu OMSI, separator „/”. */
+  path: string;
+  /** Nazwa wyświetlana (np. [friendlyname] obiektu). */
+  name?: string;
+}
 
 export interface Task {
   id: string;
@@ -59,10 +90,16 @@ export interface Task {
   /** Dane specyficzne dla rodzaju; z nich algorytm generuje treść. */
   data: Record<string, string>;
   tileRange: TileRange;
+  pin: TaskPin | null;
+  attachment: TaskAttachment | null;
   checked: boolean;
-  status: 'active' | 'archived';
+  /** active = do zrobienia, archived = wykonane, rejected = Claude nie dał rady (komentarz w rejectedComment). */
+  status: 'active' | 'archived' | 'rejected';
   createdAt: number;
   archivedAt?: number;
+  /** Krótkie uzasadnienie od Claude (z _vibe/failed.ve) — tylko dla status === 'rejected'. */
+  rejectedComment?: string;
+  rejectedAt?: number;
 }
 
 /** Zadanie razem z treścią wygenerowaną algorytmicznie z danych. */
@@ -75,6 +112,8 @@ export interface TaskInput {
   kind: string;
   data: Record<string, string>;
   tileRange?: TileRange;
+  pin?: TaskPin | null;
+  attachment?: TaskAttachment | null;
 }
 
 export interface RunState {
@@ -104,4 +143,30 @@ export interface MapOverview {
   assetCount: number;
   missingCount: number;
   indexedAt: number;
+}
+
+/** Jezdnia = spline użyty na mapie. */
+export interface RoadView {
+  path: string;
+  /** Na ilu kaflach występuje. */
+  tileCount: number;
+  /** Brak pliku w folderze OMSI. */
+  missing: boolean;
+}
+
+/** Obiekt użyty na mapie, z drzewem „folderów” z jego pliku .sco ([groups]). */
+export interface ObjectView {
+  path: string;
+  /** [friendlyname] albo nazwa pliku. */
+  name: string;
+  groups: string[];
+  tileCount: number;
+  missing: boolean;
+  /** Czy plik .sco udało się odczytać (inaczej obiekt leży w korzeniu drzewa). */
+  known: boolean;
+}
+
+export interface MapCatalog {
+  roads: RoadView[];
+  objects: ObjectView[];
 }

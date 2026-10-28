@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { sanitizeAttachment, sanitizePin, sanitizeTileRange } from '../../shared/taskExtras.ts';
 import { buildTaskContent, validateTaskInput } from '../../shared/taskTypes.ts';
 import type { Task, TaskInput, TaskView } from '../../shared/types.ts';
 
@@ -15,7 +16,14 @@ export class TaskStore {
   private read(): Task[] {
     try {
       const parsed = JSON.parse(fs.readFileSync(this.file, 'utf-8')) as Task[];
-      return Array.isArray(parsed) ? parsed : [];
+      if (!Array.isArray(parsed)) return [];
+      // zadania zapisane starszą wersją nie mają pól rozszerzeń
+      return parsed.map((t) => ({
+        ...t,
+        tileRange: sanitizeTileRange(t.tileRange),
+        pin: sanitizePin(t.pin),
+        attachment: sanitizeAttachment(t.attachment),
+      }));
     } catch {
       return [];
     }
@@ -38,7 +46,9 @@ export class TaskStore {
       title: input.title.trim(),
       kind: input.kind,
       data: input.data,
-      tileRange: input.tileRange ?? null,
+      tileRange: sanitizeTileRange(input.tileRange),
+      pin: sanitizePin(input.pin),
+      attachment: sanitizeAttachment(input.attachment),
       checked: false,
       status: 'active',
       createdAt: Date.now(),
@@ -55,7 +65,9 @@ export class TaskStore {
     if (!t) throw new Error('Nie znaleziono zadania.');
     t.title = input.title.trim();
     t.data = input.data;
-    t.tileRange = input.tileRange ?? null;
+    t.tileRange = sanitizeTileRange(input.tileRange);
+    t.pin = sanitizePin(input.pin);
+    t.attachment = sanitizeAttachment(input.attachment);
     this.write(tasks);
   }
 
@@ -71,7 +83,7 @@ export class TaskStore {
     this.write(tasks);
   }
 
-  /** Przenosi zadania do archiwum (po zakończonym sukcesem prompcie). */
+  /** Przenosi zadania do archiwum (po zakończonym sukcesem prompcie). Odrzucone i tak zostają odrzucone. */
   archive(ids: string[]): void {
     const set = new Set(ids);
     const now = Date.now();
@@ -83,6 +95,37 @@ export class TaskStore {
         t.archivedAt = now;
       }
     }
+    this.write(tasks);
+  }
+
+  /** Oznacza zadania jako odrzucone przez Claude (id → komentarz). Zwraca liczbę zmienionych. */
+  reject(comments: Map<string, string>): number {
+    const now = Date.now();
+    const tasks = this.read();
+    let n = 0;
+    for (const t of tasks) {
+      const comment = comments.get(t.id);
+      if (comment === undefined) continue;
+      t.status = 'rejected';
+      t.rejectedComment = comment;
+      t.rejectedAt = now;
+      t.checked = false;
+      delete t.archivedAt;
+      n++;
+    }
+    if (n) this.write(tasks);
+    return n;
+  }
+
+  /** „☑️ Rozwiązane”: odrzucone zadanie wraca do puli aktywnych. */
+  resolve(id: string): void {
+    const tasks = this.read();
+    const t = tasks.find((x) => x.id === id);
+    if (!t || t.status !== 'rejected') return;
+    t.status = 'active';
+    t.checked = false;
+    delete t.rejectedComment;
+    delete t.rejectedAt;
     this.write(tasks);
   }
 }

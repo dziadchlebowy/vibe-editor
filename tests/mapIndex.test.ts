@@ -178,9 +178,10 @@ test('buildMapIndex: rejestr unikatów, kopie z zachowaniem ścieżek, brakując
 });
 
 test('prompt dostaje notkę o _vibe/assets tylko gdy assety istnieją', () => {
-  const task = { id: '1', title: 'T', kind: 'text', data: {}, tileRange: null, checked: true, status: 'active' as const, createdAt: 0, content: 'x' };
-  assert.ok(buildPrompt([task], { mapName: 'M', mapFolder: 'F', hasAssets: true }).includes(ASSETS_NOTE));
-  assert.ok(!buildPrompt([task], { mapName: 'M', mapFolder: 'F' }).includes('_vibe/assets'));
+  const task = { id: '1', title: 'T', kind: 'text', data: {}, tileRange: null, pin: null, attachment: null, checked: true, status: 'active' as const, createdAt: 0, content: 'x' };
+  const ctx = { mapName: 'M', mapFolder: 'F', repoUrl: 'https://github.com/u/r.git', branch: 'VibeEditor' };
+  assert.ok(buildPrompt([task], { ...ctx, hasAssets: true }).includes(ASSETS_NOTE));
+  assert.ok(!buildPrompt([task], ctx).includes(ASSETS_NOTE));
 });
 
 test('setupRepo wyłącza _vibe/assets z repo (lokalnie), ale _vibe/map-index.json zostaje', async () => {
@@ -262,4 +263,69 @@ test('global.cfg w UTF-16 LE: mapa jest rozpoznana, kafle odczytane, zapis zacho
   assert.equal(back.encoding, 'utf-16le');
   assert.equal(findMapFolders(work)[0].name, 'Nowa');
   assert.equal(parseTiles(back.text).length, 3);
+});
+
+// --- rodzaje assetów i drzewo obiektów -------------------------------------
+
+test('parseSco: [groups] to głębokość + nazwy „folderów”, [friendlyname] to nazwa (znaczniki gdziekolwiek)', async () => {
+  const { parseSco } = await import('../src/main/core/mapIndex.ts');
+  assert.deepEqual(parseSco('[groups]\n2\nAachen\nGruen\n\n[friendlyname]\nBusch\n'), {
+    groups: ['Aachen', 'Gruen'],
+    name: 'Busch',
+  });
+  // inna kolejność, znaczniki nie na początku, inne sekcje pomiędzy
+  assert.deepEqual(parseSco('[mesh]\nx.o3d\n[friendlyname]\nBudka\n[matl]\n1\n[groups]\n1\nMiasto\n[end]\n'), {
+    groups: ['Miasto'],
+    name: 'Budka',
+  });
+  assert.deepEqual(parseSco('[groups]\n0\n[friendlyname]\nKorzeń\n'), { groups: [], name: 'Korzeń' });
+  assert.deepEqual(parseSco('[mesh]\nx.o3d\n'), { groups: [], name: '' });
+});
+
+test('indeks v2: jezdnie i obiekty osobno, drzewo grup z .sco, liczba kafli, brakujące', async () => {
+  const { toCatalog } = await import('../src/main/core/mapIndex.ts');
+  const omsi = tmp('ve-cat-');
+  put(path.join(omsi, 'Splines/Road/a.sli'), 'x');
+  put(path.join(omsi, 'Splines/Road/b.sli'), 'x');
+  put(path.join(omsi, 'Sceneryobjects/Aachen/busch.sco'), '[mesh]\nb.o3d\n[groups]\n2\nAachen\nGruen\n[friendlyname]\nBusch\n');
+  put(path.join(omsi, 'Sceneryobjects/Gen/latarnia.sco'), '[friendlyname]\nLatarnia\n');
+  const work = tmp('ve-catw-');
+  put(path.join(work, 'M', 'global.cfg'), '[map]\n0\n0\nT/a.map\n[map]\n1\n0\nT/b.map\n[description]\nd\n[friendlyname]\nF\n[name]\nN\n');
+  put(
+    path.join(work, 'M', 'T', 'a.map'),
+    '[spline]\n0\nSplines\\Road\\a.sli\n[object]\n1\nSceneryobjects\\Aachen\\busch.sco\n[splineAttachement]\n0\nSceneryobjects\\Gen\\latarnia.sco\n',
+  );
+  put(
+    path.join(work, 'M', 'T', 'b.map'),
+    '[spline_h]\n0\nSplines\\Road\\b.sli\n[spline]\n1\nSplines\\Road\\a.sli\n[attachObj]\n2\nSceneryobjects\\Brak\\nie.sco\n[object]\n3\nSceneryobjects\\Aachen\\busch.sco\n',
+  );
+
+  const idx = await buildMapIndex({ workDir: work, mapFolder: 'M', omsiDir: omsi, emit: () => {} });
+  const cat = toCatalog(idx);
+
+  assert.deepEqual(
+    cat.roads.map((r) => [r.path, r.tileCount, r.missing]),
+    [
+      ['Splines/Road/a.sli', 2, false],
+      ['Splines/Road/b.sli', 1, false],
+    ],
+  );
+  const byPath = new Map(cat.objects.map((o) => [o.path, o]));
+  assert.equal(cat.objects.length, 3);
+  assert.deepEqual(byPath.get('Sceneryobjects/Aachen/busch.sco'), {
+    path: 'Sceneryobjects/Aachen/busch.sco',
+    name: 'Busch',
+    groups: ['Aachen', 'Gruen'],
+    tileCount: 2,
+    missing: false,
+    known: true,
+  });
+  assert.equal(byPath.get('Sceneryobjects/Gen/latarnia.sco')!.name, 'Latarnia');
+  assert.deepEqual(byPath.get('Sceneryobjects/Gen/latarnia.sco')!.groups, []);
+  const brak = byPath.get('Sceneryobjects/Brak/nie.sco')!;
+  assert.equal(brak.missing, true);
+  assert.equal(brak.known, false);
+  assert.equal(brak.name, 'nie');
+  // jezdnie nie mieszają się z obiektami
+  assert.ok(!cat.roads.some((r) => r.path.endsWith('.sco')));
 });

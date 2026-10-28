@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
-import type { MapOverview, MapTileView } from '../../shared/types.ts';
+import type { MapCatalog, MapOverview, MapTileView, ObjectView, RoadView } from '../../shared/types.ts';
 import type { Emit } from './emit.ts';
-import { decodeCfg } from './globalCfg.ts';
+import { decodeCfg, splitLines } from './globalCfg.ts';
 
 export interface TileRef {
   x: number;
@@ -18,21 +18,49 @@ export interface IndexedTile extends TileRef {
   assets: number[];
 }
 
+/** Informacje o obiekcie wyczytane z jego pliku .sco. */
+export interface ObjectEntry {
+  /** Indeks w MapIndex.assets. */
+  a: number;
+  /** Nazwa wyświetlana ([friendlyname] albo nazwa pliku). */
+  n: string;
+  /** Drzewo „folderów” ([groups]) od korzenia. */
+  g: string[];
+  /** Czy udało się odczytać plik .sco. */
+  k: boolean;
+}
+
 export interface MapIndex {
-  version: 1;
+  version: 2;
   indexedAt: number;
   mapFolder: string;
   tiles: IndexedTile[];
   /** Unikatowe ścieżki assetów (względem folderu OMSI, separator „/”). */
   assets: string[];
+  /** Rodzaje assetów (równolegle do assets): bit 1 = spline (jezdnia), bit 2 = obiekt. */
+  assetKinds: number[];
   /** Assety, których nie ma w folderze OMSI. */
   missingAssets: string[];
+  /** Dane obiektów (.sco): nazwa i grupy. */
+  objects: ObjectEntry[];
 }
+
+export type AssetKind = 'spline' | 'object';
+export const KIND_BIT: Record<AssetKind, number> = { spline: 1, object: 2 };
 
 export const INDEX_FILE = 'map-index.json';
 
-/** Znaczniki, pod którymi (dwie linijki niżej) stoi ścieżka assetu — porównywane małymi literami. */
-const ASSET_MARKERS = new Set(['[spline]', '[spline_h]', '[object]', '[splineattachement]', '[attachobj]']);
+/**
+ * Znaczniki, pod którymi (dwie linijki niżej) stoi ścieżka assetu — porównywane małymi literami.
+ * Jezdnie to splajny; obiekty to [object] oraz obiekty doczepione do splajnów/obiektów.
+ */
+const MARKER_KIND: Record<string, AssetKind> = {
+  '[spline]': 'spline',
+  '[spline_h]': 'spline',
+  '[object]': 'object',
+  '[splineattachement]': 'object',
+  '[attachobj]': 'object',
+};
 const PATH_OFFSET = 2;
 
 // --- ścieżki ----------------------------------------------------------------
@@ -91,32 +119,40 @@ export function parseTiles(cfgText: string): TileRef[] {
 
 // --- plik .map: ścieżki assetów --------------------------------------------
 
+export interface TileAsset {
+  path: string;
+  kind: AssetKind;
+}
+
 /**
- * Skanuje plik .map strumieniowo (kafle bywają duże) i zwraca unikatowe ścieżki spod znaczników
- * [spline], [spline_h], [object], [splineAttachement], [attachObj] — dwie linijki pod znacznikiem.
+ * Skanuje plik .map strumieniowo (kafle bywają duże). Znaczniki mogą stać w dowolnym miejscu pliku;
+ * pod [spline], [spline_h], [object], [splineAttachement], [attachObj] czytamy ścieżkę dwie linijki niżej.
+ * Zwraca unikatowe pary (ścieżka, rodzaj).
  */
-export async function scanTileAssets(file: string): Promise<string[]> {
-  const found = new Map<string, string>(); // klucz małymi literami → pierwsza pisownia
-  const add = (raw: string, latin1: boolean): void => {
-    const t = raw.trim();
-    const norm = t ? normalizeAssetPath(latin1 ? fromLatin1(t) : t) : null;
-    if (norm && !found.has(norm.toLowerCase())) found.set(norm.toLowerCase(), norm);
-  };
+export async function scanTile(file: string): Promise<TileAsset[]> {
+  const found = new Map<string, TileAsset>(); // klucz: rodzaj + ścieżka małymi literami
   let pending = 0;
+  let pendingKind: AssetKind = 'spline';
   const feed = (line: string, latin1: boolean): void => {
     const t = line.trim();
     if (t.startsWith('[')) {
-      pending = ASSET_MARKERS.has(t.toLowerCase()) ? PATH_OFFSET : 0;
+      const kind = MARKER_KIND[t.toLowerCase()];
+      pending = kind ? PATH_OFFSET : 0;
+      if (kind) pendingKind = kind;
       return;
     }
-    if (pending > 0 && --pending === 0) add(t, latin1);
+    if (pending > 0 && --pending === 0 && t) {
+      const norm = normalizeAssetPath(latin1 ? fromLatin1(t) : t);
+      const key = `${pendingKind}:${norm?.toLowerCase()}`;
+      if (norm && !found.has(key)) found.set(key, { path: norm, kind: pendingKind });
+    }
   };
 
   const bom = await readBom(file);
   if (bom === 'utf-16be') {
     // rzadkie: zamiana bajtów wymaga całego pliku
     const text = decodeCfg(await fs.promises.readFile(file)).text;
-    for (const line of text.split(/\r\n|\n|\r/)) feed(line, false);
+    for (const line of splitLines(text)) feed(line, false);
     return [...found.values()];
   }
 
@@ -131,6 +167,50 @@ export async function scanTileAssets(file: string): Promise<string[]> {
     stream.destroy();
   }
   return [...found.values()];
+}
+
+/** Unikatowe ścieżki assetów z kafla (bez rozróżniania rodzaju, wielkość liter bez znaczenia). */
+export async function scanTileAssets(file: string): Promise<string[]> {
+  const seen = new Map<string, string>();
+  for (const a of await scanTile(file)) if (!seen.has(a.path.toLowerCase())) seen.set(a.path.toLowerCase(), a.path);
+  return [...seen.values()];
+}
+
+// --- plik .sco: drzewo grup -------------------------------------------------
+
+export interface ScoInfo {
+  /** Foldery od korzenia, np. ["Aachen", "Gruen"]. */
+  groups: string[];
+  /** [friendlyname] — pusty, gdy go nie ma. */
+  name: string;
+}
+
+/**
+ * Czyta z pliku obiektu (.sco) znaczniki [groups] i [friendlyname] (w dowolnym miejscu pliku).
+ * Pod [groups]: liczba folderów, a niżej ich nazwy. Pod [friendlyname]: nazwa obiektu.
+ */
+export function parseSco(text: string): ScoInfo {
+  const lines = splitLines(text);
+  let groups: string[] = [];
+  let hasGroups = false;
+  let name = '';
+  for (let i = 0; i < lines.length; i++) {
+    const marker = lines[i].trim().toLowerCase();
+    if (marker === '[groups]' && !hasGroups) {
+      hasGroups = true;
+      const n = Number.parseInt(lines[i + 1] ?? '', 10);
+      if (Number.isFinite(n) && n > 0) {
+        groups = lines
+          .slice(i + 2, i + 2 + n)
+          .map((l) => l.trim())
+          .filter((l) => l && !l.startsWith('['));
+      }
+    } else if (marker === '[friendlyname]' && !name) {
+      const next = (lines[i + 1] ?? '').trim();
+      if (!next.startsWith('[')) name = next;
+    }
+  }
+  return { groups, name };
 }
 
 /** Rozpoznaje BOM na początku pliku (czyta tylko 3 bajty). */
@@ -194,6 +274,7 @@ export async function buildMapIndex(o: BuildOptions): Promise<MapIndex> {
 
   const registry = new Map<string, number>(); // klucz małymi literami → indeks
   const assets: string[] = [];
+  const kinds: number[] = [];
   const tiles: IndexedTile[] = refs.map((r) => ({ ...r, exists: false, assets: [] }));
 
   let done = 0;
@@ -202,16 +283,20 @@ export async function buildMapIndex(o: BuildOptions): Promise<MapIndex> {
     if (full && fs.existsSync(full)) {
       tile.exists = true;
       try {
-        const paths = await scanTileAssets(full);
-        tile.assets = paths.map((p) => {
+        const found = await scanTile(full);
+        const ids = new Set<number>();
+        for (const { path: p, kind } of found) {
           const key = p.toLowerCase();
           let idx = registry.get(key);
           if (idx === undefined) {
             idx = assets.push(p) - 1;
+            kinds.push(0);
             registry.set(key, idx);
           }
-          return idx;
-        });
+          kinds[idx] |= KIND_BIT[kind];
+          ids.add(idx);
+        }
+        tile.assets = [...ids];
       } catch (e) {
         o.emit('app', `Nie udało się wczytać ${tile.file}: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -225,6 +310,7 @@ export async function buildMapIndex(o: BuildOptions): Promise<MapIndex> {
   const order = assets.map((_, i) => i).sort((a, b) => assets[a].localeCompare(assets[b]));
   const remap = new Map(order.map((oldIdx, newIdx) => [oldIdx, newIdx]));
   const sortedAssets = order.map((i) => assets[i]);
+  const sortedKinds = order.map((i) => kinds[i]);
   for (const t of tiles) t.assets = t.assets.map((i) => remap.get(i)!).sort((a, b) => a - b);
   tiles.sort((a, b) => a.y - b.y || a.x - b.x);
 
@@ -258,13 +344,37 @@ export async function buildMapIndex(o: BuildOptions): Promise<MapIndex> {
     o.emit('app', `Brakujące (pierwsze 10): ${missing.slice(0, 10).join(', ')}`);
   }
 
+  // Drzewo obiektów: czytamy skopiowane pliki obiektów (.sco) — [groups] i [friendlyname]
+  const missingSet = new Set(missing.map((m) => m.toLowerCase()));
+  const objects: ObjectEntry[] = [];
+  const objectIdx = sortedAssets.map((_, i) => i).filter((i) => sortedKinds[i] & KIND_BIT.object);
+  await mapLimit(objectIdx, 8, async (i) => {
+    const rel = sortedAssets[i];
+    const base = rel.split('/').pop()!.replace(/\.[^.]*$/, '');
+    const dst = safeJoin(dstRoot, rel);
+    if (!dst || missingSet.has(rel.toLowerCase())) {
+      objects.push({ a: i, n: base, g: [], k: false });
+      return;
+    }
+    try {
+      const info = parseSco(decodeCfg(await fs.promises.readFile(dst)).text);
+      objects.push({ a: i, n: info.name || base, g: info.groups, k: true });
+    } catch {
+      objects.push({ a: i, n: base, g: [], k: false });
+    }
+  });
+  objects.sort((x, y) => x.a - y.a);
+  o.emit('app', `Obiektów (.sco) wczytanych do drzewa: ${objects.filter((x) => x.k).length}/${objects.length}.`);
+
   const index: MapIndex = {
-    version: 1,
+    version: 2,
     indexedAt: Date.now(),
     mapFolder: o.mapFolder,
     tiles,
     assets: sortedAssets,
+    assetKinds: sortedKinds,
     missingAssets: missing,
+    objects,
   };
   fs.writeFileSync(indexPath(o.workDir), JSON.stringify(index), 'utf-8');
   return index;
@@ -273,7 +383,7 @@ export async function buildMapIndex(o: BuildOptions): Promise<MapIndex> {
 export function loadMapIndex(workDir: string): MapIndex | null {
   try {
     const idx = JSON.parse(fs.readFileSync(indexPath(workDir), 'utf-8')) as MapIndex;
-    return idx.version === 1 && Array.isArray(idx.tiles) ? idx : null;
+    return idx.version === 2 && Array.isArray(idx.tiles) ? idx : null;
   } catch {
     return null;
   }
@@ -298,4 +408,27 @@ export function toOverview(index: MapIndex): MapOverview {
     missingCount: index.missingAssets.length,
     indexedAt: index.indexedAt,
   };
+}
+
+/** Katalog jezdni i obiektów dla zakładek Jezdnie i Obiekty. */
+export function toCatalog(index: MapIndex): MapCatalog {
+  const missing = new Set(index.missingAssets.map((m) => m.toLowerCase()));
+  const tileCount = new Array<number>(index.assets.length).fill(0);
+  for (const t of index.tiles) for (const i of t.assets) tileCount[i]++;
+
+  const roads: RoadView[] = [];
+  index.assets.forEach((p, i) => {
+    if (index.assetKinds[i] & KIND_BIT.spline) {
+      roads.push({ path: p, tileCount: tileCount[i], missing: missing.has(p.toLowerCase()) });
+    }
+  });
+  const objects: ObjectView[] = index.objects.map((e) => ({
+    path: index.assets[e.a],
+    name: e.n,
+    groups: e.g,
+    tileCount: tileCount[e.a],
+    missing: missing.has(index.assets[e.a].toLowerCase()),
+    known: e.k,
+  }));
+  return { roads, objects };
 }
