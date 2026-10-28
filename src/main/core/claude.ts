@@ -49,6 +49,7 @@ export class ClaudeRunner extends EventEmitter {
   private sessionId: string | null = null;
   private promptText = '';
   private stopping = false;
+  private external: AbortController | null = null;
 
   private resultText = '';
   private resultIsError = false;
@@ -68,6 +69,30 @@ export class ClaudeRunner extends EventEmitter {
     this.launch(promptText, null);
   }
 
+  /**
+   * Tryb bez procesu `claude` (Claude Free): na czas działania `action` stan to „running”;
+   * po sukcesie zadania trafiają do archiwum, a błąd ląduje w `state.error`. „Zatrzymaj” przerywa akcję
+   * przez AbortSignal.
+   */
+  async runExternal(taskIds: string[], action: (signal: AbortSignal) => Promise<void>): Promise<void> {
+    if (this.state.status !== 'idle') throw new Error('Prompt jest już w toku.');
+    const ctl = new AbortController();
+    this.external = ctl;
+    this.setState({ status: 'running', taskIds });
+    try {
+      await action(ctl.signal);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this.external = null;
+      this.opts.emit('claude', msg);
+      this.setState({ status: 'idle', taskIds: [], ...(ctl.signal.aborted ? {} : { error: msg }) });
+      return;
+    }
+    this.external = null;
+    this.opts.onSuccess(taskIds);
+    this.setState({ status: 'idle', taskIds: [] });
+  }
+
   resume(): void {
     if (this.state.status !== 'paused') throw new Error('Nie ma czego wznawiać.');
     const ids = this.state.taskIds;
@@ -78,6 +103,10 @@ export class ClaudeRunner extends EventEmitter {
 
   stop(): void {
     if (this.state.status === 'idle') return;
+    if (this.external) {
+      this.external.abort();
+      return;
+    }
     if (!this.child) {
       // pauza (limit) — nic nie działa, po prostu rezygnujemy
       this.setState({ status: 'idle', taskIds: [] });

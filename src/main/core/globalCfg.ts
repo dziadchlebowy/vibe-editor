@@ -22,7 +22,8 @@ export interface DecodedCfg {
 }
 
 const MARKER = /^\s*\[([^\]\r\n]+)\]\s*$/;
-const REQUIRED_ORDER = ['name', 'friendlyname', 'description'];
+/** Znaczniki, które muszą wystąpić w global.cfg (w dowolnym miejscu i kolejności). */
+const REQUIRED_MARKERS = ['name', 'friendlyname', 'description'] as const;
 
 // --- kodowanie -------------------------------------------------------------
 
@@ -115,14 +116,15 @@ export function findSections(lines: string[]): Section[] {
   }));
 }
 
-/** Czy plik zaczyna się od znaczników [name], [friendlyname], [description] (w tej kolejności)? */
-function isMapCfg(lines: string[], sections: Section[]): boolean {
-  if (sections.length < REQUIRED_ORDER.length) return false;
-  // przed pierwszym znacznikiem nie może być żadnej treści
-  for (let i = 0; i < sections[0].start; i++) {
-    if (lines[i].trim() !== '') return false;
-  }
-  return REQUIRED_ORDER.every((m, i) => sections[i].marker === m);
+/** Pierwsza sekcja o danym znaczniku (gdziekolwiek w pliku) albo undefined. */
+function firstSection(sections: Section[], marker: string): Section | undefined {
+  return sections.find((s) => s.marker === marker);
+}
+
+/** Czy plik zawiera znaczniki [name], [friendlyname] i [description] — w dowolnym miejscu i kolejności? */
+function findInfoSections(sections: Section[]): [Section, Section, Section] | null {
+  const found = REQUIRED_MARKERS.map((m) => firstSection(sections, m));
+  return found.every((s): s is Section => s !== undefined) ? (found as [Section, Section, Section]) : null;
 }
 
 function sectionBody(lines: string[], s: Section): string[] {
@@ -132,12 +134,12 @@ function sectionBody(lines: string[], s: Section): string[] {
   return body;
 }
 
-/** Zwraca dane mapy albo null, jeśli tekst nie wygląda na global.cfg mapy. */
+/** Zwraca dane mapy albo null, jeśli w tekście brakuje któregoś ze znaczników [name]/[friendlyname]/[description]. */
 export function parseGlobalCfg(text: string): GlobalInfo | null {
   const lines = splitLines(text);
-  const sections = findSections(lines);
-  if (!isMapCfg(lines, sections)) return null;
-  const [name, friendly, desc] = sections;
+  const info = findInfoSections(findSections(lines));
+  if (!info) return null;
+  const [name, friendly, desc] = info;
   return {
     name: (sectionBody(lines, name)[0] ?? '').trim(),
     friendlyname: (sectionBody(lines, friendly)[0] ?? '').trim(),
@@ -147,50 +149,44 @@ export function parseGlobalCfg(text: string): GlobalInfo | null {
 
 const oneLine = (s: string): string => s.replace(/\s*[\r\n]+\s*/g, ' ').trim();
 
-/** Podmienia treść trzech pierwszych sekcji, resztę pliku zostawia bez zmian. */
+/**
+ * Podmienia treść sekcji [name], [friendlyname] i [description] (gdziekolwiek stoją w pliku),
+ * resztę pliku zostawia bez zmian.
+ */
 export function applyGlobalInfo(text: string, info: GlobalInfo): string {
   const eol = detectEol(text);
   const lines = splitLines(text);
-  const sections = findSections(lines);
-  if (!isMapCfg(lines, sections)) return text;
+  const found = findInfoSections(findSections(lines));
+  if (!found) return text;
+  const [sName, sFriendly, sDesc] = found;
 
-  const head = lines.slice(0, sections[0].start);
-  const rest = lines.slice(sections[2].end);
   const descLines = info.description.split(/\r\n|\n|\r/);
   while (descLines.length && descLines[descLines.length - 1].trim() === '') descLines.pop();
 
   // Zachowujemy oryginalne puste linie wokół treści każdej sekcji, żeby zapis bez zmian
   // nie modyfikował pliku.
   const blank = (n: number): string[] => Array<string>(n).fill('');
-  const leading = (s: Section): number => {
-    let n = 0;
-    for (let i = s.start + 1; i < s.end && lines[i].trim() === ''; i++) n++;
-    return n;
+  const padding = (s: Section): { lead: number; trail: number } => {
+    const body = lines.slice(s.start + 1, s.end);
+    let lead = 0;
+    while (lead < body.length && body[lead].trim() === '') lead++;
+    let trail = 0;
+    while (lead + trail < body.length && body[body.length - 1 - trail].trim() === '') trail++;
+    return { lead, trail };
   };
-  const trailing = (s: Section): number => {
-    let n = 0;
-    for (let i = s.end - 1; i > s.start && lines[i].trim() === ''; i--) n++;
-    return n;
-  };
-  const [sName, sFriendly, sDesc] = sections;
 
-  const out = [
-    ...head,
-    lines[sName.start],
-    ...blank(leading(sName)),
-    oneLine(info.name),
-    ...blank(trailing(sName)),
-    lines[sFriendly.start],
-    ...blank(leading(sFriendly)),
-    oneLine(info.friendlyname),
-    ...blank(trailing(sFriendly)),
-    lines[sDesc.start],
-    ...blank(leading(sDesc)),
-    ...descLines,
-    ...blank(trailing(sDesc)),
-    ...rest,
+  const replacements: { s: Section; content: string[] }[] = [
+    { s: sName, content: [oneLine(info.name)] },
+    { s: sFriendly, content: [oneLine(info.friendlyname)] },
+    { s: sDesc, content: descLines },
   ];
-  return out.join(eol);
+  // Od końca pliku, żeby wcześniejsze indeksy pozostały poprawne.
+  replacements.sort((a, b) => b.s.start - a.s.start);
+  for (const { s, content } of replacements) {
+    const { lead, trail } = padding(s);
+    lines.splice(s.start + 1, s.end - s.start - 1, ...blank(lead), ...content, ...blank(trail));
+  }
+  return lines.join(eol);
 }
 
 // --- system plików ---------------------------------------------------------
@@ -220,7 +216,7 @@ export function readMapCfg(cfgPath: string): GlobalInfo | null {
   }
 }
 
-/** Szuka w folderze roboczym podfolderów będących mapami OMSI (global.cfg z właściwymi znacznikami). */
+/** Szuka w folderze roboczym podfolderów będących mapami OMSI (global.cfg ze znacznikami [name], [friendlyname], [description]). */
 export function findMapFolders(workDir: string): MapFolder[] {
   let entries: fs.Dirent[];
   try {

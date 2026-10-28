@@ -414,6 +414,14 @@ async function openSettings(forced: boolean): Promise<void> {
   const mainCheck = h('input', { type: 'checkbox', checked: cur.workOnMain });
   const claudeInput = h('input', { type: 'text', value: cur.claudePath, placeholder: 'claude (z PATH)' });
   const claudeStatus = h('div', { class: 'status' });
+  const modeCode = h('input', { type: 'radio', name: 'claude-mode', value: 'code', checked: cur.claudeMode !== 'free' });
+  const modeFree = h('input', { type: 'radio', name: 'claude-mode', value: 'free', checked: cur.claudeMode === 'free' });
+  const chatInput = h('input', {
+    type: 'text',
+    value: cur.claudeChatUrl,
+    placeholder: 'https://claude.ai/chat/ID-CZATU',
+  });
+  const autoSendCheck = h('input', { type: 'checkbox', checked: cur.claudeAutoSend });
   const error = h('div', { class: 'error' });
 
   const fillMapFields = (): void => {
@@ -467,6 +475,40 @@ async function openSettings(forced: boolean): Promise<void> {
     ),
     h('button', { class: 'btn', onClick: () => void ve.openClaudeLogin(claudeInput.value) }, 'Zaloguj w Claude…'),
   );
+
+  const codePanel = h(
+    'div',
+    { class: 'mode-panel' },
+    h('label', { class: 'field-label' }, 'Claude Code — ścieżka (opcjonalnie)'),
+    claudeInput,
+    claudeBtns,
+    claudeStatus,
+    h(
+      'div',
+      { class: 'hint' },
+      'Aplikacja uruchamia Claude Code w folderze roboczym. Zaloguj się raz przyciskiem powyżej (polecenie /login).',
+    ),
+  );
+  const freePanel = h(
+    'div',
+    { class: 'mode-panel' },
+    h('label', { class: 'field-label' }, 'Link do czatu Claude'),
+    chatInput,
+    h('label', { class: 'check' }, autoSendCheck, 'Wyślij automatycznie (Enter po wklejeniu)'),
+    h(
+      'div',
+      { class: 'hint' },
+      '„Uruchom” kopiuje prompt do schowka, otwiera ten czat w aplikacji Claude (claude://) i wkleja prompt. ' +
+        'Wymaga zainstalowanej aplikacji Claude (Windows). Zadania trafiają do archiwum po wklejeniu promptu.',
+    ),
+  );
+  const syncMode = (): void => {
+    codePanel.hidden = !modeCode.checked;
+    freePanel.hidden = !modeFree.checked;
+  };
+  modeCode.addEventListener('change', syncMode);
+  modeFree.addEventListener('change', syncMode);
+  syncMode();
 
   const okBtn = h('button', { class: 'btn primary' }, 'Zatwierdź');
   const cancelBtn = h('button', { class: 'btn' }, 'Anuluj');
@@ -533,16 +575,12 @@ async function openSettings(forced: boolean): Promise<void> {
     h(
       'div',
       { class: 'field' },
-      h('label', {}, 'Claude Code — ścieżka (opcjonalnie)'),
-      claudeInput,
-      claudeBtns,
-      claudeStatus,
-      h(
-        'div',
-        { class: 'hint' },
-        'Aplikacja uruchamia Claude Code w folderze roboczym. Zaloguj się raz przyciskiem powyżej (polecenie /login).',
-      ),
+      h('label', {}, 'Claude'),
+      h('label', { class: 'check' }, modeCode, 'Claude Code'),
+      h('label', { class: 'check' }, modeFree, 'Claude Free'),
     ),
+    codePanel,
+    freePanel,
     error,
   );
   const actions = h('div', { class: 'modal-actions' }, ...(forced ? [] : [cancelBtn]), okBtn);
@@ -574,6 +612,9 @@ async function openSettings(forced: boolean): Promise<void> {
       remoteUrl: remoteInput.value,
       workOnMain: mainCheck.checked,
       claudePath: claudeInput.value,
+      claudeMode: modeFree.checked ? 'free' : 'code',
+      claudeChatUrl: chatInput.value,
+      claudeAutoSend: autoSendCheck.checked,
     });
     okBtn.disabled = false;
     cancelBtn.disabled = false;

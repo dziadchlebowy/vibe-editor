@@ -16,7 +16,7 @@ npm run typecheck
 npm run dist       # instalator Windows (NSIS)
 ```
 
-Wymagania na maszynie: **Git** w `PATH` oraz **Claude Code** (`claude`) zalogowany do konta (przycisk „Zaloguj w Claude…” w ustawieniach otwiera terminal, w którym wpisujesz `/login`).
+Wymagania na maszynie: **Git** w `PATH` oraz — zależnie od trybu Claude w ustawieniach — **Claude Code** (`claude`) zalogowany do konta (przycisk „Zaloguj w Claude…” otwiera terminal, w którym wpisujesz `/login`) albo zainstalowana **aplikacja Claude** (Claude Free, patrz niżej).
 
 ### Uprawnienia administratora
 
@@ -26,11 +26,11 @@ Instalator budowany przez `npm run dist` ma w manifeście `requireAdministrator`
 
 ```
 <folder roboczy>/
-  <folder mapy>/      ← rozpoznawany po global.cfg (pierwsze znaczniki: [name], [friendlyname], [description])
+  <folder mapy>/      ← rozpoznawany po global.cfg zawierającym znaczniki [name], [friendlyname], [description]
   _vibe/              ← tworzony przez VibeEditor: zadania (tasks.json), prompty (prompts/), assety
 ```
 
-Folder bez takiego `global.cfg` nie może zostać wybrany jako roboczy.
+Znaczniki mogą stać w dowolnym miejscu i kolejności pliku (nie muszą go otwierać) — liczy się to, co jest pod nimi. Folder bez takiego `global.cfg` nie może zostać wybrany jako roboczy. Tak samo pliki `.map` są skanowane po znacznikach, bez wymogu konkretnego początku.
 
 ## Konfiguracja (pierwsze uruchomienie i Ustawienia)
 
@@ -55,10 +55,19 @@ Do promptu dla Claude dopisywana jest krótka notka, że dokładne dane o splina
 
 Przesuwalna i zoomowalna siatka kafli (przeciąganie, kółko myszy względem kursora), start wycentrowany na środku mapy. Klik w kafel pokazuje w prawym górnym rogu: koordynaty, plik `.map`, czy plik istnieje, liczbę unikatowych assetów i ile z nich brakuje w OMSI.
 
+## Tryb Claude (Ustawienia)
+
+Dwa radio buttony:
+
+- **Claude Code** — jak dotąd: VibeEditor uruchamia `claude -p` w folderze roboczym (opcjonalna ścieżka do `claude`, przyciski „Sprawdź Claude” i „Zaloguj w Claude…”).
+- **Claude Free** — pole na link czatu (`https://claude.ai/chat/<ID>`). „▶️ Uruchom” kopiuje prompt do schowka, otwiera ten czat w aplikacji Claude (`Start-Process "claude://claude.ai/chat/<ID>"`), czeka na okno, przełącza się na nie i wkleja prompt (Ctrl+V) — opcjonalnie od razu go wysyła (Enter; checkbox „Wyślij automatycznie”). Całość robi skrypt PowerShella uruchamiany z aplikacji (`powershell.exe -EncodedCommand`), więc nic nie trzeba ręcznie wywoływać. Gdy wklejenie się nie uda, prompt zostaje w schowku, a konsola podpowiada ręczne Ctrl+V. Poza Windows tylko kopiuje prompt i otwiera link.
+
+W Claude Free nie ma informacji zwrotnej o wykonaniu pracy przez czat, więc zadania trafiają do Archiwum po wklejeniu promptu.
+
 ## Zadania
 
 - Zadanie = tytuł + treść + (w przyszłości) zakres kafli. Rodzaje zadań są polimorficzne — rejestr w `src/shared/taskTypes.ts`; treść jest generowana algorytmicznie z danych formularza (dla „zwykłego tekstowego” to po prostu wpisany tekst).
-- „▶️ Uruchom” składa zaznaczone zadania w jeden plik (`_vibe/prompts/prompt-*.md`) i wysyła do Claude Code (`claude -p`, tryb `acceptEdits`).
+- „▶️ Uruchom” składa zaznaczone zadania w jeden plik (`_vibe/prompts/prompt-*.md`) i wysyła go do Claude Code (`claude -p`, tryb `acceptEdits`) albo — w trybie Claude Free — do czatu w aplikacji Claude.
 - Po sukcesie zadania trafiają do **Archiwum**. „⏹️ Zatrzymaj” przerywa pracę.
 - Po wyczerpaniu limitu przycisk zmienia się na „⏸️Wznów od HH:MM”; wznowienie kontynuuje tę samą sesję Claude.
 

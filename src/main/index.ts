@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'electron';
 import { exec, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,6 +12,7 @@ import type {
   TaskInput,
 } from '../shared/types.ts';
 import { ClaudeRunner } from './core/claude.ts';
+import { parseChatUrl, sendPromptToClaudeApp } from './core/claudeFree.ts';
 import type { Emit } from './core/emit.ts';
 import { findMapFolders, writeMapInfo } from './core/globalCfg.ts';
 import { GitRunner, setupRepo } from './core/git.ts';
@@ -96,7 +97,7 @@ function inspectWorkDir(dir: string): InspectResult {
     return {
       ok: false,
       error:
-        'W tym folderze nie znaleziono folderu mapy OMSI (brak podfolderu z plikiem global.cfg zaczynającym się od znaczników [name], [friendlyname], [description]).',
+        'W tym folderze nie znaleziono folderu mapy OMSI (brak podfolderu z plikiem global.cfg zawierającym znaczniki [name], [friendlyname] i [description]).',
       maps: [],
     };
   }
@@ -119,6 +120,11 @@ async function saveAll(req: SaveRequest): Promise<OkResult> {
   if (!req.name.trim() || !req.friendlyname.trim()) return fail('Pola „nazwa” i „friendlyname” nie mogą być puste.');
   if (!/^(https?:\/\/|git@|ssh:\/\/)/i.test(remoteUrl)) {
     return fail('Podaj link do repozytorium na GitHubie (np. https://github.com/użytkownik/repo.git).');
+  }
+
+  const claudeChatUrl = req.claudeChatUrl.trim();
+  if (req.claudeMode === 'free' && !parseChatUrl(claudeChatUrl)) {
+    return fail('Claude Free: podaj link do czatu w formacie https://claude.ai/chat/<ID czatu>.');
   }
 
   saving = true;
@@ -154,6 +160,9 @@ async function saveAll(req: SaveRequest): Promise<OkResult> {
       remoteUrl,
       workOnMain: req.workOnMain,
       claudePath: req.claudePath.trim(),
+      claudeMode: req.claudeMode === 'free' ? 'free' : 'code',
+      claudeChatUrl,
+      claudeAutoSend: req.claudeAutoSend,
       configured: true,
     };
     saveSettings(settingsFile(), settings);
@@ -275,7 +284,26 @@ function registerIpc(): void {
       });
       const file = writePromptFile(vibeDir(settings.workDir), text);
       emit('app', `Zapisano prompt: ${file}`);
-      runner.start(text, tasks.map((t) => t.id));
+      const ids = tasks.map((t) => t.id);
+      if (settings.claudeMode === 'free') {
+        if (!parseChatUrl(settings.claudeChatUrl)) {
+          return fail('Claude Free: w ustawieniach podaj link do czatu (https://claude.ai/chat/<ID czatu>).');
+        }
+        // Nie czekamy na wynik: stan („W toku…”, błąd) idzie do UI przez run:state.
+        void runner.runExternal(ids, (signal) =>
+          sendPromptToClaudeApp({
+            chatUrl: settings.claudeChatUrl,
+            prompt: text,
+            autoSend: settings.claudeAutoSend,
+            writeClipboard: (t) => clipboard.writeText(t),
+            openLink: (url) => shell.openExternal(url),
+            emit,
+            signal,
+          }),
+        ).catch((e: unknown) => emit('app', errMsg(e)));
+      } else {
+        runner.start(text, ids);
+      }
       return { ok: true };
     } catch (e) {
       return fail(errMsg(e));

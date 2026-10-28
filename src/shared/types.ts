@@ -6,6 +6,9 @@ export interface ConsoleLine {
   text: string;
 }
 
+/** Sposób wykonywania promptu: Claude Code (proces `claude`) albo Claude Free (czat w aplikacji Claude). */
+export type ClaudeMode = 'code' | 'free';
+
 export interface Settings {
   omsiDir: string;
   workDir: string;
@@ -15,6 +18,11 @@ export interface Settings {
   workOnMain: boolean;
   /** Opcjonalna ścieżka do claude(.exe); puste = z PATH. */
   claudePath: string;
+  claudeMode: ClaudeMode;
+  /** Claude Free: link do czatu (https://claude.ai/chat/ID), do którego trafia prompt. */
+  claudeChatUrl: string;
+  /** Claude Free: czy po wklejeniu prompta automatycznie go wysłać (Enter). */
+  claudeAutoSend: boolean;
   configured: boolean;
 }
 
@@ -41,6 +49,9 @@ export interface SaveRequest {
   remoteUrl: string;
   workOnMain: boolean;
   claudePath: string;
+  claudeMode: ClaudeMode;
+  claudeChatUrl: string;
+  claudeAutoSend: boolean;
 }
 
 export interface OkResult {

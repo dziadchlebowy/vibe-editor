@@ -33,11 +33,17 @@ test('parseGlobalCfg czyta name, friendlyname i wieloliniowy opis', () => {
   assert.equal(info.description, 'Bialoleka to jedna z największych dzielnic Warszawy.\n\nBlablabla\n123 test.');
 });
 
-test('parseGlobalCfg odrzuca pliki bez właściwych pierwszych znaczników', () => {
-  assert.equal(parseGlobalCfg('[friendlyname]\nX\n[name]\nY\n[description]\nZ\n'), null);
-  assert.equal(parseGlobalCfg('coś\n[name]\nA\n[friendlyname]\nB\n[description]\nC\n'), null);
+test('parseGlobalCfg wymaga tylko obecności trzech znaczników — w dowolnym miejscu i kolejności', () => {
   assert.equal(parseGlobalCfg('[name]\nA\n[description]\nC\n'), null);
+  assert.equal(parseGlobalCfg('[name]\nA\n[friendlyname]\nB\n'), null);
+  assert.equal(parseGlobalCfg('nic tu nie ma\n'), null);
   assert.equal(parseGlobalCfg(''), null);
+
+  const reordered = parseGlobalCfg('[friendlyname]\nX\n[name]\nY\n[description]\nZ\n')!;
+  assert.deepEqual(reordered, { name: 'Y', friendlyname: 'X', description: 'Z' });
+
+  const withPrefix = parseGlobalCfg('komentarz\n[version]\n2\n[name]\nA\n[map]\n0\n0\nx.map\n[friendlyname]\nB\n[description]\nC\nD\n')!;
+  assert.deepEqual(withPrefix, { name: 'A', friendlyname: 'B', description: 'C\nD' });
 });
 
 test('parseGlobalCfg działa z CRLF i znacznikami w innej wielkości liter', () => {
@@ -57,6 +63,16 @@ test('applyGlobalInfo podmienia dane i zachowuje resztę pliku oraz CRLF', () =>
   assert.equal(info.description, 'a\nb');
   assert.ok(out.includes('[end]'));
   assert.ok(out.includes('[other]\r\nx'));
+});
+
+test('applyGlobalInfo podmienia sekcje rozrzucone po pliku i nie rusza reszty', () => {
+  const text = '[version]\r\n2\r\n[description]\r\nstary\r\nopis\r\n\r\n[map]\r\n0\r\n0\r\na.map\r\n[name]\r\nStara\r\n[friendlyname]\r\nS\r\n[end]\r\n';
+  const out = applyGlobalInfo(text, { name: 'Nowa', friendlyname: 'N', description: 'nowy' });
+  assert.equal(
+    out,
+    '[version]\r\n2\r\n[description]\r\nnowy\r\n\r\n[map]\r\n0\r\n0\r\na.map\r\n[name]\r\nNowa\r\n[friendlyname]\r\nN\r\n[end]\r\n',
+  );
+  assert.equal(applyGlobalInfo(text, parseGlobalCfg(text)!), text);
 });
 
 test('applyGlobalInfo bez zmian daje identyczny tekst', () => {

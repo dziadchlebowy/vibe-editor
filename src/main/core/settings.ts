@@ -9,6 +9,9 @@ export const DEFAULT_SETTINGS: Settings = {
   remoteUrl: '',
   workOnMain: false,
   claudePath: '',
+  claudeMode: 'code',
+  claudeChatUrl: '',
+  claudeAutoSend: true,
   configured: false,
 };
 
