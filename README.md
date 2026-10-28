@@ -16,7 +16,7 @@ npm run typecheck
 npm run dist       # instalator Windows (NSIS)
 ```
 
-Wymagania na maszynie: **Git** w `PATH` oraz **Claude Code** (`claude`) zalogowany do konta (przycisk „Zaloguj w Claude…” w ustawieniach otwiera terminal, w którym wpisujesz `/login`).
+Wymagania na maszynie: **Git** w `PATH` oraz — zależnie od trybu Claude w ustawieniach — **Claude Code** (`claude`) zalogowany do konta (przycisk „Zaloguj w Claude…” otwiera terminal, w którym wpisujesz `/login`) albo zainstalowana **aplikacja Claude** (Claude Free, patrz niżej).
 
 ### Uprawnienia administratora
 
@@ -26,7 +26,7 @@ Instalator budowany przez `npm run dist` ma w manifeście `requireAdministrator`
 
 ```
 <folder roboczy>/
-  <folder mapy>/      ← rozpoznawany po global.cfg (pierwsze znaczniki: [name], [friendlyname], [description])
+  <folder mapy>/      ← rozpoznawany po global.cfg zawierającym znaczniki [name], [friendlyname], [description]
   _vibe/              ← tworzony przez VibeEditor: zadania (tasks.json), prompty (prompts/), assety
 ```
 
@@ -59,20 +59,12 @@ Do promptu dla Claude dopisywana jest krótka notka, że dokładne dane o splina
 - **Obiekty** — drzewo obiektów z plików `.sco`: `[groups]` (liczba, a pod nią nazwy „folderów” od korzenia) i `[friendlyname]` (np. `📂 Aachen › 📂 Gruen › 🏠 Busch`). Dwuklik tworzy nowe zadanie z podpiętym obiektem.
 - **Konsola** — output Gita i Claude (filtr: wszystko / tylko Git / tylko Claude).
 
-## Zadania
+## Tryb Claude (Ustawienia)
 
-- Zadanie = tytuł + treść (z rodzaju zadania; rejestr w `src/shared/taskTypes.ts`) + opcjonalnie: **zakres kafli** („Dobierz kafle…” otwiera mapkę do zaznaczania kafli), **pinezka** („Wskaż na mapie…”) oraz **załącznik** — jezdnia albo obiekt wybrany z listy tego, co jest na mapie (nieistniejących assetów nie da się podpiąć).
-- **Przed każdym „Uruchom”** aplikacja upewnia się, że folder roboczy jest w aktualnej wersji wypchnięty do repo: commit zmian (jeśli są), push na gałąź z ustawień i sprawdzenie, że zdalna gałąź wskazuje ten sam commit. Przy rozjechaniu historii zgłasza błąd (nic nie nadpisuje).
-- „▶️ Uruchom” składa zaznaczone zadania w jeden prompt (`_vibe/prompts/prompt-*.md`). Prompt zawiera: link do repo i gałąź, na którą Claude ma zpushować zmiany, **ponumerowane zadania** (z kafelkami, pinezką i załącznikiem), zasady edycji oraz protokół niewykonalnych zadań.
-- **Zasady edycji dla Claude:** wolno mu zmieniać TYLKO folder mapy, `_vibe/inspirations/` (zwięzłe notatki) i `_vibe/failed.ve`. Zakaz ruszania `_vibe/assets/` i zmyślania nieistniejących assetów. W trybie Claude Code dodatkowo przekazywane są reguły `--disallowedTools` blokujące edycję plików aplikacji (`_vibe/assets`, `_vibe/prompts`, `tasks.json`, `map-index.json`, `.git`).
-- **Niewykonalne zadania:** Claude wpisuje w `_vibe/failed.ve` linijki `<numer>: <krótki powód>`. Aplikacja wczytuje ten plik (po zakończeniu pracy Claude Code, a w trybie Free okresowo) i przenosi wskazane zadania do kategorii **Odrzucone** z komentarzem. „☑️ Rozwiązane” zwraca zadanie do Aktywnych.
-- Po sukcesie pozostałe zadania trafiają do **Archiwum**. „⏹️ Zatrzymaj” przerywa pracę (także w trakcie synchronizacji z repo).
-- Po wyczerpaniu limitu (Claude Code) przycisk zmienia się na „⏸️Wznów od HH:MM”; wznowienie kontynuuje tę samą sesję Claude.
+Dwa radio buttony:
 
-## Claude Code vs Claude Free (Ustawienia)
-
-- **Claude Code** — aplikacja uruchamia `claude -p` w folderze roboczym (tryb `acceptEdits`), pokazuje output w konsoli, wykrywa limit i wznawia sesję.
-- **Claude Free** — pole na link czatu (`https://claude.ai/chat/ID`). Po „Uruchom” prompt trafia do schowka, aplikacja odpala `claude://claude.ai/chat/ID` (PowerShell `Start-Process`), po ok. 1,5 s wciska Ctrl+V, a Ty zatwierdzasz Enterem — albo robi to sama, gdy zaznaczysz „Po wklejeniu sam naciśnij Enter”. Tylko Windows. Aplikacja nie widzi, kiedy Claude skończy, więc zadania trafiają do Archiwum od razu po wklejeniu.
+- **Claude Code** — jak dotąd: VibeEditor uruchamia `claude -p` w folderze roboczym (opcjonalna ścieżka do `claude`, przyciski „Sprawdź Claude” i „Zaloguj w Claude…”).
+- **Claude Free** — pole na link czatu (`https://claude.ai/chat/ID`). Po „Uruchom” prompt trafia do schowka, aplikacja otwiera ten czat w aplikacji Claude (`claude://claude.ai/chat/ID`), czeka na okno i wkleja prompt (Ctrl+V); Ty zatwierdzasz Enterem — albo robi to sama, gdy zaznaczysz „Wyślij automatycznie (Enter po wklejeniu)”. Automatyczne wklejanie działa tylko w Windows. Aplikacja nie widzi, kiedy Claude skończy, więc zadania trafiają do Archiwum od razu po wklejeniu.
 
 Pinezka jest zapisana w jednostkach kafli (środek kafla (x, y) to dokładnie (x, y), oś Y rośnie na północ); w prompcie przeliczana jest na przesunięcie od środka kafla w metrach przy założeniu kafla 300×300 m.
 

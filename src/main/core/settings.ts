@@ -11,7 +11,7 @@ export const DEFAULT_SETTINGS: Settings = {
   claudeMode: 'code',
   claudePath: '',
   claudeChatUrl: '',
-  claudeAutoEnter: false,
+  claudeAutoSend: true,
   configured: false,
 };
 

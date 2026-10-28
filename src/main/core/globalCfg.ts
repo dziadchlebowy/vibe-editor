@@ -22,6 +22,8 @@ export interface DecodedCfg {
 }
 
 const MARKER = /^\s*\[([^\]\r\n]+)\]\s*$/;
+/** Znaczniki, które muszą wystąpić w global.cfg (w dowolnym miejscu i kolejności). */
+const REQUIRED_MARKERS = ['name', 'friendlyname', 'description'] as const;
 
 // --- kodowanie -------------------------------------------------------------
 
@@ -114,18 +116,15 @@ export function findSections(lines: string[]): Section[] {
   }));
 }
 
-interface MapSections {
-  name: Section;
-  friendly: Section;
-  desc: Section;
+/** Pierwsza sekcja o danym znaczniku (gdziekolwiek w pliku) albo undefined. */
+function firstSection(sections: Section[], marker: string): Section | undefined {
+  return sections.find((s) => s.marker === marker);
 }
 
-/** Znajduje (pierwsze wystąpienia) znaczników [name], [friendlyname], [description] — w dowolnym miejscu pliku. */
-function locateMapSections(sections: Section[]): MapSections | null {
-  const name = sections.find((s) => s.marker === 'name');
-  const friendly = sections.find((s) => s.marker === 'friendlyname');
-  const desc = sections.find((s) => s.marker === 'description');
-  return name && friendly && desc ? { name, friendly, desc } : null;
+/** Czy plik zawiera znaczniki [name], [friendlyname] i [description] — w dowolnym miejscu i kolejności? */
+function findInfoSections(sections: Section[]): [Section, Section, Section] | null {
+  const found = REQUIRED_MARKERS.map((m) => firstSection(sections, m));
+  return found.every((s): s is Section => s !== undefined) ? (found as [Section, Section, Section]) : null;
 }
 
 function sectionBody(lines: string[], s: Section): string[] {
@@ -135,59 +134,57 @@ function sectionBody(lines: string[], s: Section): string[] {
   return body;
 }
 
-/** Zwraca dane mapy albo null, jeśli w tekście brakuje któregoś ze znaczników. */
+/** Zwraca dane mapy albo null, jeśli w tekście brakuje któregoś ze znaczników [name]/[friendlyname]/[description]. */
 export function parseGlobalCfg(text: string): GlobalInfo | null {
   const lines = splitLines(text);
-  const found = locateMapSections(findSections(lines));
-  if (!found) return null;
+  const info = findInfoSections(findSections(lines));
+  if (!info) return null;
+  const [name, friendly, desc] = info;
   return {
-    name: (sectionBody(lines, found.name)[0] ?? '').trim(),
-    friendlyname: (sectionBody(lines, found.friendly)[0] ?? '').trim(),
-    description: sectionBody(lines, found.desc).join('\n'),
+    name: (sectionBody(lines, name)[0] ?? '').trim(),
+    friendlyname: (sectionBody(lines, friendly)[0] ?? '').trim(),
+    description: sectionBody(lines, desc).join('\n'),
   };
 }
 
 const oneLine = (s: string): string => s.replace(/\s*[\r\n]+\s*/g, ' ').trim();
 
 /**
- * Podmienia treść sekcji [name], [friendlyname], [description] (gdziekolwiek stoją w pliku).
- * Sekcje, których wartość się nie zmieniła, i cała reszta pliku zostają bez zmian.
+ * Podmienia treść sekcji [name], [friendlyname] i [description] (gdziekolwiek stoją w pliku),
+ * resztę pliku zostawia bez zmian.
  */
 export function applyGlobalInfo(text: string, info: GlobalInfo): string {
   const eol = detectEol(text);
   const lines = splitLines(text);
-  const found = locateMapSections(findSections(lines));
+  const found = findInfoSections(findSections(lines));
   if (!found) return text;
-  const current = parseGlobalCfg(text)!;
+  const [sName, sFriendly, sDesc] = found;
 
   const descLines = info.description.split(/\r\n|\n|\r/);
   while (descLines.length && descLines[descLines.length - 1].trim() === '') descLines.pop();
 
-  const jobs: { section: Section; content: string[]; changed: boolean }[] = [
-    { section: found.name, content: [oneLine(info.name)], changed: oneLine(info.name) !== current.name },
-    {
-      section: found.friendly,
-      content: [oneLine(info.friendlyname)],
-      changed: oneLine(info.friendlyname) !== current.friendlyname,
-    },
-    {
-      section: found.desc,
-      content: descLines,
-      changed: descLines.join('\n') !== current.description,
-    },
-  ];
-
-  // od końca pliku, żeby wcześniejsze indeksy się nie przesuwały
-  jobs.sort((x, y) => y.section.start - x.section.start);
-  for (const { section, content, changed } of jobs) {
-    if (!changed) continue;
-    const body = lines.slice(section.start + 1, section.end);
+  // Zachowujemy oryginalne puste linie wokół treści każdej sekcji, żeby zapis bez zmian
+  // nie modyfikował pliku.
+  const blank = (n: number): string[] => Array<string>(n).fill('');
+  const padding = (s: Section): { lead: number; trail: number } => {
+    const body = lines.slice(s.start + 1, s.end);
     let lead = 0;
     while (lead < body.length && body[lead].trim() === '') lead++;
     let trail = 0;
-    while (lead < body.length && trail < body.length - lead && body[body.length - 1 - trail].trim() === '') trail++;
-    const blank = (n: number): string[] => Array<string>(n).fill('');
-    lines.splice(section.start + 1, body.length, ...blank(lead), ...content, ...blank(trail));
+    while (lead + trail < body.length && body[body.length - 1 - trail].trim() === '') trail++;
+    return { lead, trail };
+  };
+
+  const replacements: { s: Section; content: string[] }[] = [
+    { s: sName, content: [oneLine(info.name)] },
+    { s: sFriendly, content: [oneLine(info.friendlyname)] },
+    { s: sDesc, content: descLines },
+  ];
+  // Od końca pliku, żeby wcześniejsze indeksy pozostały poprawne.
+  replacements.sort((a, b) => b.s.start - a.s.start);
+  for (const { s, content } of replacements) {
+    const { lead, trail } = padding(s);
+    lines.splice(s.start + 1, s.end - s.start - 1, ...blank(lead), ...content, ...blank(trail));
   }
   return lines.join(eol);
 }
@@ -219,7 +216,7 @@ export function readMapCfg(cfgPath: string): GlobalInfo | null {
   }
 }
 
-/** Szuka w folderze roboczym podfolderów będących mapami OMSI (global.cfg z właściwymi znacznikami). */
+/** Szuka w folderze roboczym podfolderów będących mapami OMSI (global.cfg ze znacznikami [name], [friendlyname], [description]). */
 export function findMapFolders(workDir: string): MapFolder[] {
   let entries: fs.Dirent[];
   try {

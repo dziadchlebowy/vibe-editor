@@ -196,6 +196,11 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .modal h2 { margin: 0 0 4px; font-size: 18px; }
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field label { color: var(--muted); font-size: 12px; }
+.field label.check { color: var(--text, inherit); font-size: 13px; }
+.mode-panel { display: flex; flex-direction: column; gap: 6px; }
+.mode-panel[hidden] { display: none; }
+.mode-panel .field-label { color: var(--muted); font-size: 12px; }
+input[type="radio"] { width: 16px; height: 16px; margin: 0; }
 .row { display: flex; gap: 8px; }
 .row > input { flex: 1; min-width: 0; }
 input[type="text"], textarea, select {

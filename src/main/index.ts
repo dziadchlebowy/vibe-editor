@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'electron';
 import { exec, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,9 +12,9 @@ import type {
   TaskInput,
 } from '../shared/types.ts';
 import { ClaudeRunner } from './core/claude.ts';
+import { parseChatUrl, sendPromptToClaudeApp } from './core/claudeFree.ts';
 import type { Emit } from './core/emit.ts';
 import { findMapFolders, writeMapInfo } from './core/globalCfg.ts';
-import { parseChatLink, sendToClaudeFree } from './core/claudeFree.ts';
 import { applyFailed, clearFailed, writeLastRun } from './core/failed.ts';
 import { GitRunner, setupRepo, syncToRemote } from './core/git.ts';
 import { assetsDir, buildMapIndex, loadMapIndex, toCatalog, toOverview } from './core/mapIndex.ts';
@@ -124,8 +124,9 @@ async function saveAll(req: SaveRequest): Promise<OkResult> {
   }
 
   const claudeMode = req.claudeMode === 'free' ? 'free' : 'code';
-  if (claudeMode === 'free' && !parseChatLink(req.claudeChatUrl)) {
-    return fail('Claude Free: podaj poprawny link czatu (np. https://claude.ai/chat/ID-CZATU).');
+  const claudeChatUrl = req.claudeChatUrl.trim();
+  if (claudeMode === 'free' && !parseChatUrl(claudeChatUrl)) {
+    return fail('Claude Free: podaj link do czatu w formacie https://claude.ai/chat/<ID czatu>.');
   }
 
   saving = true;
@@ -162,8 +163,8 @@ async function saveAll(req: SaveRequest): Promise<OkResult> {
       workOnMain: req.workOnMain,
       claudeMode,
       claudePath: req.claudePath.trim(),
-      claudeChatUrl: req.claudeChatUrl.trim(),
-      claudeAutoEnter: !!req.claudeAutoEnter,
+      claudeChatUrl,
+      claudeAutoSend: req.claudeAutoSend,
       configured: true,
     };
     saveSettings(settingsFile(), settings);
@@ -291,8 +292,9 @@ function registerIpc(): void {
     const tasks = store.list().filter((t) => t.status === 'active' && ids.includes(t.id));
     if (tasks.length === 0) return fail('Zaznacz co najmniej jedno zadanie.');
     const free = settings.claudeMode === 'free';
-    const chatUrl = free ? parseChatLink(settings.claudeChatUrl) : null;
-    if (free && !chatUrl) return fail('Claude Free: wpisz poprawny link czatu w ustawieniach (https://claude.ai/chat/ID-CZATU).');
+    if (free && !parseChatUrl(settings.claudeChatUrl)) {
+      return fail('Claude Free: w ustawieniach podaj link do czatu (https://claude.ai/chat/<ID czatu>).');
+    }
 
     const taskIds = tasks.map((t) => t.id);
     const branch = targetBranch(settings);
@@ -318,12 +320,22 @@ function registerIpc(): void {
 
     try {
       if (free) {
-        runner.startJob(taskIds, async (signal) => {
-          await prepare();
-          clipboard.writeText(text);
-          emit('claude', 'Prompt skopiowany do schowka.');
-          await sendToClaudeFree({ url: chatUrl!, autoEnter: settings.claudeAutoEnter, emit, signal });
-        });
+        // Nie czekamy na wynik: stan („W toku…”, błąd) idzie do UI przez run:state.
+        void runner
+          .runExternal(taskIds, async (signal) => {
+            await prepare();
+            if (signal.aborted) throw new Error('Zatrzymano.');
+            await sendPromptToClaudeApp({
+              chatUrl: settings.claudeChatUrl,
+              prompt: text,
+              autoSend: settings.claudeAutoSend,
+              writeClipboard: (t) => clipboard.writeText(t),
+              openLink: (url) => shell.openExternal(url),
+              emit,
+              signal,
+            });
+          })
+          .catch((e: unknown) => emit('app', errMsg(e)));
       } else {
         runner.start(text, taskIds, prepare);
       }

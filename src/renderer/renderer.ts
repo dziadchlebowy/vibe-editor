@@ -786,6 +786,14 @@ async function openSettings(forced: boolean): Promise<void> {
   const mainCheck = h('input', { type: 'checkbox', checked: cur.workOnMain });
   const claudeInput = h('input', { type: 'text', value: cur.claudePath, placeholder: 'claude (z PATH)' });
   const claudeStatus = h('div', { class: 'status' });
+  const modeCode = h('input', { type: 'radio', name: 'claude-mode', value: 'code', checked: cur.claudeMode !== 'free' });
+  const modeFree = h('input', { type: 'radio', name: 'claude-mode', value: 'free', checked: cur.claudeMode === 'free' });
+  const chatInput = h('input', {
+    type: 'text',
+    value: cur.claudeChatUrl,
+    placeholder: 'https://claude.ai/chat/ID-CZATU',
+  });
+  const autoSendCheck = h('input', { type: 'checkbox', checked: cur.claudeAutoSend });
   const error = h('div', { class: 'error' });
 
   const fillMapFields = (): void => {
@@ -840,29 +848,30 @@ async function openSettings(forced: boolean): Promise<void> {
     h('button', { class: 'btn', onClick: () => void ve.openClaudeLogin(claudeInput.value) }, 'Zaloguj w Claude…'),
   );
 
-  const modeCode = h('input', { type: 'radio', name: 'claudeMode', value: 'code', checked: cur.claudeMode !== 'free' });
-  const modeFree = h('input', { type: 'radio', name: 'claudeMode', value: 'free', checked: cur.claudeMode === 'free' });
-  const chatInput = h('input', { type: 'text', value: cur.claudeChatUrl, placeholder: 'https://claude.ai/chat/ID-CZATU' });
-  const autoEnter = h('input', { type: 'checkbox', checked: cur.claudeAutoEnter });
   const codePanel = h(
     'div',
-    { class: 'field' },
-    h('label', {}, 'Claude Code — ścieżka (opcjonalnie)'),
+    { class: 'mode-panel' },
+    h('label', { class: 'field-label' }, 'Claude Code — ścieżka (opcjonalnie)'),
     claudeInput,
     claudeBtns,
     claudeStatus,
-    h('div', { class: 'hint' }, 'Aplikacja uruchamia Claude Code w folderze roboczym. Zaloguj się raz przyciskiem powyżej (polecenie /login).'),
-  );
-  const freePanel = h(
-    'div',
-    { class: 'field' },
-    h('label', {}, 'Link czatu Claude'),
-    chatInput,
-    h('label', { class: 'check' }, autoEnter, 'Po wklejeniu sam naciśnij Enter'),
     h(
       'div',
       { class: 'hint' },
-      'Po „Uruchom” prompt trafia do schowka, aplikacja Claude otwiera podany czat, po ok. 1,5 s wciska Ctrl+V, a Ty tylko zatwierdzasz Enterem (chyba że zaznaczono automatyczny Enter). Działa w Windows z zainstalowaną aplikacją Claude.',
+      'Aplikacja uruchamia Claude Code w folderze roboczym. Zaloguj się raz przyciskiem powyżej (polecenie /login).',
+    ),
+  );
+  const freePanel = h(
+    'div',
+    { class: 'mode-panel' },
+    h('label', { class: 'field-label' }, 'Link do czatu Claude'),
+    chatInput,
+    h('label', { class: 'check' }, autoSendCheck, 'Wyślij automatycznie (Enter po wklejeniu)'),
+    h(
+      'div',
+      { class: 'hint' },
+      '„Uruchom” kopiuje prompt do schowka, otwiera ten czat w aplikacji Claude (claude://) i wkleja prompt. ' +
+        'Wymaga zainstalowanej aplikacji Claude (Windows). Zadania trafiają do archiwum po wklejeniu promptu.',
     ),
   );
   const syncMode = (): void => {
@@ -935,7 +944,13 @@ async function openSettings(forced: boolean): Promise<void> {
     h('div', { class: 'field' }, h('label', {}, 'Link do repozytorium na GitHubie'), remoteInput),
     h('label', { class: 'check' }, mainCheck, 'Pracuj na main (zamiast gałęzi „VibeEditor”)'),
     h('hr', { class: 'sep' }),
-    h('div', { class: 'field' }, h('label', {}, 'Claude'), h('div', { class: 'radios' }, h('label', { class: 'check' }, modeCode, 'Claude Code'), h('label', { class: 'check' }, modeFree, 'Claude Free'))),
+    h(
+      'div',
+      { class: 'field' },
+      h('label', {}, 'Claude'),
+      h('label', { class: 'check' }, modeCode, 'Claude Code'),
+      h('label', { class: 'check' }, modeFree, 'Claude Free'),
+    ),
     codePanel,
     freePanel,
     error,
@@ -971,7 +986,7 @@ async function openSettings(forced: boolean): Promise<void> {
       claudeMode: modeFree.checked ? 'free' : 'code',
       claudePath: claudeInput.value,
       claudeChatUrl: chatInput.value,
-      claudeAutoEnter: autoEnter.checked,
+      claudeAutoSend: autoSendCheck.checked,
     });
     okBtn.disabled = false;
     cancelBtn.disabled = false;

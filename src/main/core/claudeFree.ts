@@ -1,100 +1,128 @@
 import { spawn } from 'node:child_process';
 import type { Emit } from './emit.ts';
 
-const CHAT_LINK = /claude\.ai\/chat\/([A-Za-z0-9-]{8,64})/i;
-const BARE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Czas (ms) na załadowanie czatu w aplikacji Claude po pojawieniu się jej okna, zanim wkleimy prompt. */
+export const CHAT_LOAD_DELAY_MS = 3000;
+/** Ile sekund czekamy, aż pojawi się okno aplikacji Claude po uruchomieniu linku. */
+export const WINDOW_WAIT_SECONDS = 25;
 
-/** Czas na otwarcie/zogniskowanie okna czatu, zanim naciśniemy Ctrl+V. */
-export const PASTE_DELAY_MS = 1500;
-/** Przerwa między wklejeniem a automatycznym Enterem (długi prompt musi się wstawić). */
-export const ENTER_DELAY_MS = 1000;
+const CHAT_LINK =
+  /^(?:(?:https?|claude):\/\/)?(?:www\.)?claude\.ai\/chat\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[/?#].*)?$/i;
 
 /**
- * Z linku czatu (https://claude.ai/chat/ID, claude://claude.ai/chat/ID albo samego ID)
- * robi adres protokołu aplikacji: claude://claude.ai/chat/ID. Null, gdy nie rozpoznano.
- * ID jest ściśle walidowane, bo trafia do skryptu PowerShell.
+ * Z linku do czatu (https://claude.ai/chat/ID albo claude://claude.ai/chat/ID) robi link
+ * otwierający czat w aplikacji desktopowej: claude://claude.ai/chat/ID. Null, gdy to nie link czatu.
  */
-export function parseChatLink(input: string): string | null {
-  const t = input.trim();
-  const m = CHAT_LINK.exec(t);
-  if (m) return `claude://claude.ai/chat/${m[1]}`;
-  return BARE_ID.test(t) ? `claude://claude.ai/chat/${t}` : null;
+export function parseChatUrl(input: string): string | null {
+  const m = CHAT_LINK.exec(input.trim());
+  return m ? `claude://claude.ai/chat/${m[1].toLowerCase()}` : null;
 }
 
-/** Skrypt PowerShell: odpal czat w aplikacji Claude, poczekaj, wklej (Ctrl+V), opcjonalnie Enter. */
-export function buildPasteScript(url: string, o: { autoEnter: boolean; delayMs?: number }): string {
-  const lines = [
-    "$ErrorActionPreference = 'Stop'",
-    `Start-Process '${url}'`,
-    `Start-Sleep -Milliseconds ${o.delayMs ?? PASTE_DELAY_MS}`,
-    'Add-Type -AssemblyName System.Windows.Forms',
-    "[System.Windows.Forms.SendKeys]::SendWait('^v')",
-  ];
-  if (o.autoEnter) {
-    lines.push(`Start-Sleep -Milliseconds ${ENTER_DELAY_MS}`, "[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')");
-  }
-  return lines.join('\n');
+export interface PasteScriptOptions {
+  /** Czy po wklejeniu nacisnąć Enter (wysłać wiadomość). */
+  autoSend: boolean;
+  loadDelayMs?: number;
+  waitSeconds?: number;
 }
 
-/** Argumenty powershell.exe: skrypt jako -EncodedCommand (UTF-16LE base64), więc bez problemów z cudzysłowami. */
-export function powershellArgs(script: string): string[] {
+/** Kody wyjścia skryptu — mapowane na komunikaty w {@link describeExit}. */
+export const EXIT_NO_WINDOW = 2;
+export const EXIT_NO_FOCUS = 3;
+
+/**
+ * Skrypt PowerShella: otwiera czat linkiem claude://, czeka na okno aplikacji, przełącza na nie
+ * i wkleja ze schowka (Ctrl+V), opcjonalnie wysyłając Enterem. Prompt musi już leżeć w schowku.
+ * Link jest weryfikowany przez {@link parseChatUrl}, więc bezpiecznie wchodzi w apostrofy.
+ */
+export function buildPasteScript(deepLink: string, opts: PasteScriptOptions): string {
+  if (!/^claude:\/\/claude\.ai\/chat\/[0-9a-f-]{36}$/.test(deepLink)) throw new Error('Niepoprawny link czatu.');
+  const delay = opts.loadDelayMs ?? CHAT_LOAD_DELAY_MS;
+  const wait = opts.waitSeconds ?? WINDOW_WAIT_SECONDS;
   return [
-    '-NoProfile',
-    '-NonInteractive',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-WindowStyle',
-    'Hidden',
-    '-EncodedCommand',
-    Buffer.from(script, 'utf16le').toString('base64'),
-  ];
+    "$ErrorActionPreference = 'Stop'",
+    `Start-Process '${deepLink}'`,
+    `$deadline = (Get-Date).AddSeconds(${wait})`,
+    '$proc = $null',
+    'while ((Get-Date) -lt $deadline) {',
+    "  $proc = Get-Process -Name 'claude' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1",
+    '  if ($proc) { break }',
+    '  Start-Sleep -Milliseconds 500',
+    '}',
+    `if (-not $proc) { Write-Output 'Nie znaleziono okna aplikacji Claude.'; exit ${EXIT_NO_WINDOW} }`,
+    `Start-Sleep -Milliseconds ${delay}`,
+    '$ws = New-Object -ComObject WScript.Shell',
+    'if (-not $ws.AppActivate($proc.Id)) {',
+    '  Start-Sleep -Milliseconds 800',
+    `  if (-not $ws.AppActivate($proc.Id)) { Write-Output 'Nie udało się przełączyć na okno Claude.'; exit ${EXIT_NO_FOCUS} }`,
+    '}',
+    'Start-Sleep -Milliseconds 600',
+    "$ws.SendKeys('^v')",
+    ...(opts.autoSend ? ['Start-Sleep -Milliseconds 800', "$ws.SendKeys('{ENTER}')"] : []),
+    "Write-Output 'Prompt wklejony do czatu.'",
+  ].join('\r\n');
 }
 
-export type ScriptRunner = (script: string, signal: AbortSignal) => Promise<void>;
+/** PowerShell -EncodedCommand przyjmuje Base64 z UTF-16LE — nie trzeba nic cytować. */
+export function encodePowerShell(script: string): string {
+  return Buffer.from(script, 'utf16le').toString('base64');
+}
 
-/** Uruchamia skrypt w ukrytym PowerShellu; sygnał przerywa cały proces. */
-export const runPowerShell: ScriptRunner = (script, signal) =>
-  new Promise((resolve, reject) => {
-    const child = spawn('powershell.exe', powershellArgs(script), {
-      windowsHide: true,
-      stdio: ['ignore', 'ignore', 'pipe'],
-    });
-    let stderr = '';
+export function describeExit(code: number): string {
+  if (code === EXIT_NO_WINDOW) {
+    return 'Nie znaleziono okna aplikacji Claude (czy aplikacja jest zainstalowana i obsługuje linki claude://?). Prompt jest w schowku — wklej go ręcznie (Ctrl+V).';
+  }
+  if (code === EXIT_NO_FOCUS) {
+    return 'Nie udało się przełączyć na okno Claude. Prompt jest w schowku — wklej go ręcznie (Ctrl+V).';
+  }
+  return `Skrypt PowerShella zakończył się błędem (kod ${code}). Prompt jest w schowku — wklej go ręcznie (Ctrl+V).`;
+}
+
+export interface SendOptions {
+  /** Link czatu z ustawień (https://claude.ai/chat/ID lub claude://…). */
+  chatUrl: string;
+  prompt: string;
+  autoSend: boolean;
+  /** Zapis do schowka (Electron: clipboard.writeText) — wstrzykiwany, żeby rdzeń nie zależał od Electrona. */
+  writeClipboard: (text: string) => void;
+  /** Otwarcie linku poza Windows (Electron: shell.openExternal). */
+  openLink: (url: string) => Promise<void>;
+  emit: Emit;
+  signal?: AbortSignal;
+}
+
+/** Kopiuje prompt do schowka, otwiera czat w aplikacji Claude i (na Windows) wkleja prompt. */
+export async function sendPromptToClaudeApp(o: SendOptions): Promise<void> {
+  const link = parseChatUrl(o.chatUrl);
+  if (!link) throw new Error('Niepoprawny link czatu. Oczekiwany format: https://claude.ai/chat/<ID czatu>.');
+
+  o.writeClipboard(o.prompt);
+  o.emit('claude', `Prompt skopiowany do schowka (${o.prompt.length} znaków).`);
+  o.emit('claude', `Otwieram czat: ${link}`);
+
+  if (process.platform !== 'win32') {
+    await o.openLink(link);
+    o.emit('claude', 'Automatyczne wklejanie działa tylko na Windows — wklej prompt ręcznie (Ctrl+V).');
+    return;
+  }
+
+  const script = buildPasteScript(link, { autoSend: o.autoSend });
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodePowerShell(script)],
+      { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], signal: o.signal },
+    );
+    child.stdout.setEncoding('utf-8');
     child.stderr.setEncoding('utf-8');
-    child.stderr.on('data', (d: string) => (stderr += d));
-    const onAbort = (): void => {
-      if (child.pid) spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
-    };
-    if (signal.aborted) onAbort();
-    else signal.addEventListener('abort', onAbort, { once: true });
-    child.on('error', reject);
+    child.stdout.on('data', (d: string) => o.emit('claude', d));
+    child.stderr.on('data', (d: string) => o.emit('claude', d));
+    child.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.name === 'AbortError') reject(new Error('Zatrzymano.'));
+      else reject(new Error(err.code === 'ENOENT' ? 'Nie znaleziono powershell.exe.' : err.message));
+    });
     child.on('close', (code) => {
-      signal.removeEventListener('abort', onAbort);
       if (code === 0) resolve();
-      else reject(new Error(`PowerShell zakończył się błędem (${code}): ${stderr.trim().split(/\r?\n/).slice(-2).join(' ')}`));
+      else reject(new Error(describeExit(code ?? -1)));
     });
   });
-
-export interface FreeSendOptions {
-  url: string;
-  autoEnter: boolean;
-  emit: Emit;
-  signal: AbortSignal;
-  run?: ScriptRunner;
-  platform?: string;
-  delayMs?: number;
-}
-
-/**
- * Tryb „Claude Free”: zakłada, że prompt jest już w schowku. Odpala czat w aplikacji Claude,
- * po chwili wciska Ctrl+V (i opcjonalnie Enter).
- */
-export async function sendToClaudeFree(o: FreeSendOptions): Promise<void> {
-  if ((o.platform ?? process.platform) !== 'win32') {
-    throw new Error('Tryb Claude Free działa tylko w Windows (wymaga aplikacji Claude i PowerShell).');
-  }
-  o.emit('claude', `Otwieram czat: ${o.url}`);
-  const script = buildPasteScript(o.url, { autoEnter: o.autoEnter, delayMs: o.delayMs });
-  await (o.run ?? runPowerShell)(script, o.signal);
-  o.emit('claude', o.autoEnter ? 'Prompt wklejony i zatwierdzony (Enter).' : 'Prompt wklejony — zatwierdź go Enterem w oknie Claude.');
 }
