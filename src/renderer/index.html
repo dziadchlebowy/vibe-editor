@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VibeEditor</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">VibeEditor</div>
+      <nav class="tabs" id="tabs"></nav>
+      <button class="icon-btn" id="settings-btn" title="Ustawienia (Ctrl+,)">⚙ Ustawienia</button>
+    </header>
+    <main>
+      <section id="view-tasks" class="view"></section>
+      <section id="view-map" class="view"></section>
+      <section id="view-console" class="view"></section>
+    </main>
+    <div id="modal-root"></div>
+    <script src="renderer.js"></script>
+  </body>
+</html>

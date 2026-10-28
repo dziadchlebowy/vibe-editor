@@ -1,0 +1,34 @@
+{
+  "name": "vibe-editor",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "VibeEditor — asystent edytowania map do OMSI",
+  "main": "dist/main/index.cjs",
+  "private": true,
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "node build.mjs && electron .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types \"tests/*.test.ts\"",
+    "dist": "node build.mjs && electron-builder --win"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "electron": "latest",
+    "electron-builder": "latest",
+    "esbuild": "latest",
+    "typescript": "latest"
+  },
+  "build": {
+    "appId": "pl.dziadchlebowy.vibeeditor",
+    "productName": "VibeEditor",
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "requestedExecutionLevel": "requireAdministrator"
+    }
+  }
+}
