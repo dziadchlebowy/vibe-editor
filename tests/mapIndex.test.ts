@@ -198,3 +198,68 @@ test('setupRepo wyłącza _vibe/assets z repo (lokalnie), ale _vibe/map-index.js
   const ex = fs.readFileSync(path.join(work, '.git', 'info', 'exclude'), 'utf-8');
   assert.equal(ex.split('\n').filter((l) => l === '_vibe/assets/').length, 1);
 });
+
+// --- kodowania plików OMSI --------------------------------------------------
+
+const enc = {
+  le: (t: string): Buffer => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(t, 'utf16le')]),
+  be: (t: string): Buffer => Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(t, 'utf16le').swap16()]),
+  u8: (t: string): Buffer => Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(t, 'utf-8')]),
+};
+
+test('scanTileAssets czyta kafle w UTF-16 LE, UTF-16 BE i UTF-8 z BOM tak samo jak ANSI', async () => {
+  const dir = tmp('ve-enc-');
+  const expected = [
+    'Splines/Road/a.sli',
+    'Splines/Road/H.sli',
+    'Sceneryobjects/Gen/b.sco',
+    'Splines/Road/att.sco',
+    'Sceneryobjects/Gen/c.sco',
+  ];
+  const text = TILE_A.replace(/\n/g, '\r\n');
+  for (const [name, buf] of Object.entries({ le: enc.le(text), be: enc.be(text), u8: enc.u8(text) })) {
+    const f = path.join(dir, `${name}.map`);
+    fs.writeFileSync(f, buf);
+    assert.deepEqual(await scanTileAssets(f), expected, name);
+  }
+});
+
+test('UTF-16 LE: ścieżki z polskimi znakami i duży plik (granice porcji strumienia)', async () => {
+  const dir = tmp('ve-enc2-');
+  let text = '';
+  for (let i = 0; i < 6000; i++) text += `[object]\r\n${i}\r\nSceneryobjects\\Gen\\obj${i}.sco\r\n0\r\n`;
+  text += '[spline]\r\n1\r\nSplines\\Łódź\\żółć.sli\r\n';
+  fs.writeFileSync(path.join(dir, 'big.map'), enc.le(text));
+  const paths = await scanTileAssets(path.join(dir, 'big.map'));
+  assert.equal(paths.length, 6001);
+  assert.equal(paths[6000], 'Splines/Łódź/żółć.sli');
+});
+
+test('global.cfg w UTF-16 LE: mapa jest rozpoznana, kafle odczytane, zapis zachowuje kodowanie', async () => {
+  const { findMapFolders, writeMapInfo, decodeCfg } = await import('../src/main/core/globalCfg.ts');
+  const omsi = tmp('ve-omsi16-');
+  put(path.join(omsi, 'Splines/Road/a.sli'), 'x');
+  const work = tmp('ve-work16-');
+  const cfgPath = path.join(work, 'Mapa', 'global.cfg');
+  fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+  fs.writeFileSync(cfgPath, enc.le(CFG.replace(/\n/g, '\r\n')));
+  fs.mkdirSync(path.join(work, 'Mapa', 'Tiles'));
+  fs.writeFileSync(path.join(work, 'Mapa', 'Tiles', 'tile_0_0.map'), enc.le('[spline]\r\n0\r\nSplines\\Road\\a.sli\r\n'));
+
+  const maps = findMapFolders(work);
+  assert.equal(maps.length, 1);
+  assert.equal(maps[0].name, 'Test [map]');
+
+  const idx = await buildMapIndex({ workDir: work, mapFolder: 'Mapa', omsiDir: omsi, emit: () => {} });
+  assert.equal(idx.tiles.length, 3);
+  assert.deepEqual(idx.assets, ['Splines/Road/a.sli']);
+  assert.ok(fs.existsSync(path.join(assetsDir(work), 'Splines/Road/a.sli')));
+
+  assert.equal(writeMapInfo(cfgPath, { name: 'Nowa', friendlyname: 'N', description: 'opis' }), true);
+  const raw = fs.readFileSync(cfgPath);
+  assert.deepEqual([raw[0], raw[1]], [0xff, 0xfe]);
+  const back = decodeCfg(raw);
+  assert.equal(back.encoding, 'utf-16le');
+  assert.equal(findMapFolders(work)[0].name, 'Nowa');
+  assert.equal(parseTiles(back.text).length, 3);
+});

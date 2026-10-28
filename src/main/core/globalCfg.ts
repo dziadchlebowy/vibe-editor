@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export type CfgEncoding = 'utf-8' | 'windows-1250';
+export type CfgEncoding = 'utf-8' | 'windows-1250' | 'utf-16le' | 'utf-16be';
 
 export interface GlobalInfo {
   name: string;
@@ -41,6 +41,14 @@ function getCp1250Reverse(): Map<string, number> {
 }
 
 export function decodeCfg(buf: Buffer): DecodedCfg {
+  // UTF-16 (OMSI zapisuje tak część plików) rozpoznajemy po BOM
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+    return { text: buf.subarray(2).toString('utf16le'), encoding: 'utf-16le', bom: true };
+  }
+  if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+    const swapped = Buffer.from(buf.subarray(2)).swap16();
+    return { text: swapped.toString('utf16le'), encoding: 'utf-16be', bom: true };
+  }
   let body = buf;
   let bom = false;
   if (body.length >= 3 && body[0] === 0xef && body[1] === 0xbb && body[2] === 0xbf) {
@@ -56,6 +64,12 @@ export function decodeCfg(buf: Buffer): DecodedCfg {
 }
 
 export function encodeCfg(text: string, encoding: CfgEncoding, bom: boolean): Buffer {
+  if (encoding === 'utf-16le') {
+    return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+  }
+  if (encoding === 'utf-16be') {
+    return Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, 'utf16le').swap16()]);
+  }
   if (encoding === 'utf-8') {
     const body = Buffer.from(text, 'utf-8');
     return bom ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), body]) : body;

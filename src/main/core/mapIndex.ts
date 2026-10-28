@@ -97,26 +97,55 @@ export function parseTiles(cfgText: string): TileRef[] {
  */
 export async function scanTileAssets(file: string): Promise<string[]> {
   const found = new Map<string, string>(); // klucz małymi literami → pierwsza pisownia
-  const stream = fs.createReadStream(file, { encoding: 'latin1' });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  const add = (raw: string, latin1: boolean): void => {
+    const t = raw.trim();
+    const norm = t ? normalizeAssetPath(latin1 ? fromLatin1(t) : t) : null;
+    if (norm && !found.has(norm.toLowerCase())) found.set(norm.toLowerCase(), norm);
+  };
   let pending = 0;
-  try {
-    for await (const line of rl) {
-      const t = line.trim();
-      if (t.startsWith('[')) {
-        pending = ASSET_MARKERS.has(t.toLowerCase()) ? PATH_OFFSET : 0;
-        continue;
-      }
-      if (pending > 0 && --pending === 0) {
-        const norm = t ? normalizeAssetPath(fromLatin1(t)) : null;
-        if (norm && !found.has(norm.toLowerCase())) found.set(norm.toLowerCase(), norm);
-      }
+  const feed = (line: string, latin1: boolean): void => {
+    const t = line.trim();
+    if (t.startsWith('[')) {
+      pending = ASSET_MARKERS.has(t.toLowerCase()) ? PATH_OFFSET : 0;
+      return;
     }
+    if (pending > 0 && --pending === 0) add(t, latin1);
+  };
+
+  const bom = await readBom(file);
+  if (bom === 'utf-16be') {
+    // rzadkie: zamiana bajtów wymaga całego pliku
+    const text = decodeCfg(await fs.promises.readFile(file)).text;
+    for (const line of text.split(/\r\n|\n|\r/)) feed(line, false);
+    return [...found.values()];
+  }
+
+  // UTF-16 LE / UTF-8 z BOM: dekodowanie strumieniowe; reszta: bajt = znak, potem Windows-1250
+  const encoding = bom === 'utf-16le' ? 'utf16le' : bom === 'utf-8' ? 'utf8' : 'latin1';
+  const stream = fs.createReadStream(file, { encoding });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const line of rl) feed(line, encoding === 'latin1');
   } finally {
     rl.close();
     stream.destroy();
   }
   return [...found.values()];
+}
+
+/** Rozpoznaje BOM na początku pliku (czyta tylko 3 bajty). */
+async function readBom(file: string): Promise<'utf-16le' | 'utf-16be' | 'utf-8' | null> {
+  const fh = await fs.promises.open(file, 'r');
+  try {
+    const b = Buffer.alloc(3);
+    const { bytesRead } = await fh.read(b, 0, 3, 0);
+    if (bytesRead >= 2 && b[0] === 0xff && b[1] === 0xfe) return 'utf-16le';
+    if (bytesRead >= 2 && b[0] === 0xfe && b[1] === 0xff) return 'utf-16be';
+    if (bytesRead >= 3 && b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf) return 'utf-8';
+    return null;
+  } finally {
+    await fh.close();
+  }
 }
 
 // --- indeksowanie i kopiowanie ---------------------------------------------
