@@ -1,3 +1,4 @@
+import { SLI_GUIDE_REL } from './sliGuide.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pinToTile } from '../../shared/taskExtras.ts';
@@ -24,6 +25,10 @@ export const ASSETS_NOTE =
   'i czytaj tylko te, których potrzebujesz. Lista kafli i użytych assetów: `_vibe/map-index.json` ' +
   '(duży plik — przeszukuj Grepem, nie czytaj całego).';
 
+/** Wzmianka o instrukcji czytania .sli — dodawana do każdego promptu. */
+export const SLI_NOTE =
+  `Jak czytać pliki splinów (.sli): zajrzyj do \`${SLI_GUIDE_REL}\` (krótka instrukcja formatu, tylko do odczytu).`;
+
 /** Jedyne miejsca, które wolno edytować — pierwsza pozycja zależy od mapy. */
 export function allowedEditPaths(mapFolder: string): string[] {
   return [`${mapFolder}/`, '_vibe/inspirations/', '_vibe/failed.ve'];
@@ -39,7 +44,7 @@ export function rulesSection(mapFolder: string): string[] {
     '- plik `_vibe/failed.ve` — wyłącznie według zasad z sekcji „Zadania, których nie da się wykonać”.',
     '',
     'Zakazy:',
-    '- NIE ruszaj folderu `_vibe/assets/` (to tylko do odczytu — kopie plików gry),',
+    '- NIE ruszaj folderu `_vibe/assets/` ani pliku `_vibe/jak_czytac_sli.txt` (to tylko do odczytu),',
     '- NIE zmyślaj nieistniejących assetów: używaj tylko takich splinów i obiektów, których pliki istnieją ' +
       'w `_vibe/assets/` albo są już użyte na mapie; nie wymyślaj ścieżek ani nazw plików,',
     '- NIE edytuj niczego innego (m.in. reszty `_vibe/`, plików poza folderem mapy). ' +
@@ -108,6 +113,7 @@ export function buildPrompt(tasks: TaskView[], ctx: PromptContext): string {
     '',
     'Wykonaj poniższe zadania, edytując pliki mapy w bieżącym katalogu roboczym.',
     ...(ctx.hasAssets ? [ASSETS_NOTE] : []),
+    SLI_NOTE,
     '',
     ...repoSection(ctx.repoUrl, ctx.branch),
     ...rulesSection(ctx.mapFolder),

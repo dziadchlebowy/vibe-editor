@@ -207,3 +207,17 @@ test('ClaudeRunner.start z prepare: przygotowanie przed procesem; błąd przygot
   await new Promise((r) => setTimeout(r, 300));
   assert.ok(!order.slice(calls).includes('success'));
 });
+
+test('instrukcja .sli: plik zapisywany w _vibe, prompt zawsze o niej wspomina, poprawna pisownia [heightprofile]', async () => {
+  const { ensureSliGuide, SLI_GUIDE, SLI_GUIDE_REL } = await import('../src/main/core/sliGuide.ts');
+  const { buildPrompt } = await import('../src/main/core/promptBuilder.ts');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 've-sli-'));
+  const file = ensureSliGuide(dir);
+  assert.equal(file, path.join(dir, '_vibe', 'jak_czytac_sli.txt'));
+  assert.equal(fs.readFileSync(file, 'utf-8'), SLI_GUIDE);
+  assert.ok(SLI_GUIDE.includes('[heightprofile]') && SLI_GUIDE.includes('[profilepnt]') && SLI_GUIDE.includes('[path]'));
+  for (const hasAssets of [true, false]) {
+    const text = buildPrompt([], { mapName: 'M', mapFolder: 'M', repoUrl: 'u', branch: 'b', hasAssets });
+    assert.ok(text.includes(SLI_GUIDE_REL));
+  }
+});

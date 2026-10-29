@@ -1,3 +1,4 @@
+import { ensureSliGuide } from './sliGuide.ts';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -106,6 +107,7 @@ export async function setupRepo(git: GitRunner, o: SetupOptions): Promise<void> 
     await git.run(['init']);
   }
   excludeAssets(o.workDir);
+  ensureSliGuide(o.workDir);
   await git.run(['config', 'core.autocrlf', 'false']);
   await git.run(['config', 'core.longpaths', 'true']);
 

@@ -18,6 +18,7 @@ import { findMapFolders, writeMapInfo } from './core/globalCfg.ts';
 import { applyFailed, clearFailed, writeLastRun } from './core/failed.ts';
 import { GitRunner, setupRepo, syncToRemote } from './core/git.ts';
 import { assetsDir, buildMapIndex, loadMapIndex, toCatalog, toOverview } from './core/mapIndex.ts';
+import { ensureSliGuide } from './core/sliGuide.ts';
 import { buildPrompt, writePromptFile } from './core/promptBuilder.ts';
 import { loadSettings, saveSettings, targetBranch, vibeDir } from './core/settings.ts';
 import { TaskStore } from './core/tasks.ts';
@@ -312,6 +313,7 @@ function registerIpc(): void {
 
     // Przed każdym uruchomieniem folder roboczy musi być w aktualnej wersji wypchnięty do repo.
     const prepare = async (): Promise<void> => {
+      ensureSliGuide(settings.workDir);
       emit('app', `Sprawdzam, czy folder roboczy jest wypchnięty do repozytorium (gałąź ${branch})…`);
       const r = await syncToRemote(new GitRunner(settings.workDir, emit), { branch, remoteUrl: settings.remoteUrl });
       emit('app', r.committed ? `Wypchnięto aktualne zmiany (${r.commit.slice(0, 7)}).` : `Repozytorium jest aktualne (${r.commit.slice(0, 7)}).`);
