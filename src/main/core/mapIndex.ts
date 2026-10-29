@@ -4,6 +4,13 @@ import readline from 'node:readline';
 import type { MapCatalog, MapOverview, MapTileView, ObjectView, RoadView } from '../../shared/types.ts';
 import type { Emit } from './emit.ts';
 import { decodeCfg, splitLines } from './globalCfg.ts';
+import {
+  buildSplinesData,
+  extentFromAssets,
+  parseTileSplines,
+  splinesPath,
+  type TileSplines,
+} from './mapSplines.ts';
 
 export interface TileRef {
   x: number;
@@ -277,6 +284,7 @@ export async function buildMapIndex(o: BuildOptions): Promise<MapIndex> {
   const kinds: number[] = [];
   const tiles: IndexedTile[] = refs.map((r) => ({ ...r, exists: false, assets: [] }));
 
+  const tileSplines: TileSplines[] = [];
   let done = 0;
   await mapLimit(tiles, 4, async (tile) => {
     const full = safeJoin(mapDir, tile.file);
@@ -297,6 +305,7 @@ export async function buildMapIndex(o: BuildOptions): Promise<MapIndex> {
           ids.add(idx);
         }
         tile.assets = [...ids];
+        tileSplines.push({ x: tile.x, y: tile.y, splines: parseTileSplines(decodeCfg(await fs.promises.readFile(full)).text) });
       } catch (e) {
         o.emit('app', `Nie udało się wczytać ${tile.file}: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -365,6 +374,11 @@ export async function buildMapIndex(o: BuildOptions): Promise<MapIndex> {
   });
   objects.sort((x, y) => x.a - y.a);
   o.emit('app', `Obiektów (.sco) wczytanych do drzewa: ${objects.filter((x) => x.k).length}/${objects.length}.`);
+
+  tileSplines.sort((a, b) => a.y - b.y || a.x - b.x);
+  const splineData = buildSplinesData(tileSplines, extentFromAssets(dstRoot));
+  fs.writeFileSync(splinesPath(o.workDir), JSON.stringify(splineData), 'utf-8');
+  o.emit('app', `Splinów do narysowania na mapie: ${splineData.tiles.reduce((n, t) => n + t.s.length, 0)}.`);
 
   const index: MapIndex = {
     version: 2,

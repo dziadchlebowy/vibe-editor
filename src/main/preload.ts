@@ -27,6 +27,7 @@ const api: VeApi = {
   reindexMap: () => ipcRenderer.invoke('map:reindex'),
   isMapIndexing: () => ipcRenderer.invoke('map:indexing'),
   getCatalog: () => ipcRenderer.invoke('map:catalog'),
+  getMapSplines: () => ipcRenderer.invoke('map:splines'),
 
   getConsoleHistory: () => ipcRenderer.invoke('console:history'),
 

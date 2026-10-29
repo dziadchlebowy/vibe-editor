@@ -1,4 +1,4 @@
-import type { MapOverview, MapTileView, TaskPin, TileCoord } from '../shared/types.ts';
+import type { MapOverview, MapSplines, MapTileView, TaskPin, TileCoord } from '../shared/types.ts';
 import { clear, h } from './dom.ts';
 
 /**
@@ -43,6 +43,8 @@ export class MapGrid {
 
   private data: MapOverview | null = null;
   private pins: GridPin[] = [];
+  private splines: MapSplines | null = null;
+  private roadColors: string[] = [];
   private selectedTile: MapTileView | null = null;
   private selectedPin: GridPin | null = null;
   private chosen = new Map<string, TileCoord>();
@@ -86,6 +88,17 @@ export class MapGrid {
       this.selectedTile = overview?.tiles.find((c) => c.x === t.x && c.y === t.y) ?? null;
     }
     this.refresh();
+  }
+
+  /** Spliny z kafli: rysowane na kaflach według pozycji, długości, łuku i szerokości przekroju. */
+  setSplines(data: MapSplines | null): void {
+    this.splines = data;
+    // delikatne różnicowanie kolorów: im szerszy przekrój, tym jaśniejszy i cieplejszy odcień
+    this.roadColors = (data?.roads ?? []).map((r) => {
+      const t = Math.max(0, Math.min(1, (r.b - r.a - 2) / 20));
+      return `hsl(${Math.round(215 - t * 170)} 30% ${Math.round(26 + t * 24)}%)`;
+    });
+    this.draw();
   }
 
   setBusy(value: boolean): void {
@@ -342,6 +355,47 @@ export class MapGrid {
     ctx.fill();
   }
 
+  /** Rysuje spliny widocznych kafli jako pasy o szerokości przekroju (w skali mapy; min. 1 px). */
+  private drawSplines(w: number, hh: number): void {
+    const data = this.splines;
+    if (!data) return;
+    const ctx = this.ctx;
+    const scale = this.scale;
+    const mPx = scale / 300; // pikseli na metr
+    ctx.lineCap = 'butt';
+    ctx.lineJoin = 'round';
+    for (const t of data.tiles) {
+      const left = this.sx(t.x - 0.5, w);
+      const top = this.sy(t.y + 0.5, hh);
+      if (left + scale < 0 || top + scale < 0 || left > w || top > hh) continue;
+      for (const [ri, lx, ly, hdg, len, radius, mirror] of t.s) {
+        const road = data.roads[ri];
+        if (!road) continue;
+        // środek przekroju względem osi splinu (po odbiciu zmienia stronę)
+        const c = ((road.a + road.b) / 2) * (mirror ? -1 : 1);
+        const k = radius !== 0 ? 1 / radius : 0; // dodatni promień = skręt w prawo (zgodnie z azymutem)
+        const phi0 = (hdg * Math.PI) / 180;
+        const steps = k === 0 ? 1 : Math.max(1, Math.ceil(Math.abs(len * k) / (Math.PI / 36)));
+        ctx.beginPath();
+        for (let i = 0; i <= steps; i++) {
+          const sLen = (len * i) / steps;
+          const phi = phi0 + k * sLen;
+          const mx = k === 0 ? Math.sin(phi0) * sLen : (Math.cos(phi0) - Math.cos(phi)) / k;
+          const my = k === 0 ? Math.cos(phi0) * sLen : (Math.sin(phi) - Math.sin(phi0)) / k;
+          const ex = lx + mx + Math.cos(phi) * c;
+          const ey = ly + my - Math.sin(phi) * c;
+          const px = left + ex * mPx;
+          const py = top + (300 - ey) * mPx;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.strokeStyle = this.roadColors[ri] ?? '#444';
+        ctx.lineWidth = Math.max(1, (road.b - road.a) * mPx);
+        ctx.stroke();
+      }
+    }
+  }
+
   private draw(): void {
     const ctx = this.ctx;
     const c = this.canvas;
@@ -393,6 +447,8 @@ export class MapGrid {
         ctx.fillText(`${t.x}, ${t.y}`, left + scale / 2, top + scale / 2);
       }
     }
+
+    this.drawSplines(w, hh);
 
     if (this.selectedTile && this.opts.mode === 'info') {
       const left = this.sx(this.selectedTile.x - 0.5, w);

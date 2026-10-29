@@ -3,6 +3,7 @@ import type {
   InspectResult,
   MapCatalog,
   MapOverview,
+  MapSplines,
   OkResult,
   RunState,
   SaveRequest,
@@ -38,6 +39,7 @@ export interface VeApi {
   reindexMap(): Promise<OkResult>;
   isMapIndexing(): Promise<boolean>;
   getCatalog(): Promise<MapCatalog>;
+  getMapSplines(): Promise<MapSplines | null>;
 
   getConsoleHistory(): Promise<ConsoleLine[]>;
 

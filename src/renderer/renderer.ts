@@ -710,6 +710,7 @@ async function refreshMap(): Promise<void> {
   updateStatusBar();
   mapGrid.setBusy(mapBusy);
   mapGrid.setData(overview);
+  mapGrid.setSplines(await ve.getMapSplines());
   roadsView.setCatalog(catalog);
   objectsView.setCatalog(catalog);
   updateMapToolbar();

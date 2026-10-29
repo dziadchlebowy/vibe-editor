@@ -18,6 +18,7 @@ import { findMapFolders, writeMapInfo } from './core/globalCfg.ts';
 import { applyFailed, clearFailed, writeLastRun } from './core/failed.ts';
 import { GitRunner, setupRepo, syncToRemote } from './core/git.ts';
 import { assetsDir, buildMapIndex, loadMapIndex, toCatalog, toOverview } from './core/mapIndex.ts';
+import { loadMapSplines } from './core/mapSplines.ts';
 import { ensureSliGuide } from './core/sliGuide.ts';
 import { buildPrompt, writePromptFile } from './core/promptBuilder.ts';
 import { loadSettings, saveSettings, targetBranch, vibeDir } from './core/settings.ts';
@@ -370,6 +371,8 @@ function registerIpc(): void {
     const idx = settings.workDir ? loadMapIndex(settings.workDir) : null;
     return idx && idx.mapFolder === settings.mapFolder ? toCatalog(idx) : { roads: [], objects: [] };
   });
+
+  ipcMain.handle('map:splines', () => (settings.workDir ? loadMapSplines(settings.workDir) : null));
 
   ipcMain.handle('console:history', () => consoleBuffer);
 

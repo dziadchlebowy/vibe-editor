@@ -172,3 +172,14 @@ export interface MapCatalog {
   roads: RoadView[];
   objects: ObjectView[];
 }
+
+/**
+ * Spliny z kafli do narysowania na mapie. Każdy spline to krotka
+ * [indeks drogi, x lokalny (m), y lokalny (m), azymut (° od północy), długość (m), promień (m, 0 = prosta), odbicie 0/1].
+ */
+export interface MapSplines {
+  version: 1;
+  /** Drogi: ścieżka .sli i zakres X przekroju (min, max) w metrach. */
+  roads: { p: string; a: number; b: number }[];
+  tiles: { x: number; y: number; s: number[][] }[];
+}

@@ -329,3 +329,28 @@ test('indeks v2: jezdnie i obiekty osobno, drzewo grup z .sco, liczba kafli, bra
   // jezdnie nie mieszają się z obiektami
   assert.ok(!cat.roads.some((r) => r.path.endsWith('.sco')));
 });
+
+test('mapSplines: wpisy [spline]/[spline_h] z prawdziwego kafla i zakres przekroju z .sli', async () => {
+  const { parseTileSplines, sliExtent, buildSplinesData } = await import('../src/main/core/mapSplines.ts');
+  const rec = (kind: string, p: string, v: string[]): string => [`[${kind}]`, '0', p, ...v, ''].join('\r\n');
+  const text = [
+    rec('spline', 'Splines\\W\\trzy.sli', '1570323 1570322 0 272.3621 3.762543E-06 7.955322 366.6462 230 0 0 0 0 0 0 0 378'.split(' ')),
+    rec('spline', 'Splines\\W\\dwa.sli', '1570338 1570352 1570394 253.4318 3.777444E-06 18.25952 366.6462 110 10000 0 0 0 0 0 0 0 1200.997 mirror'.split(' ')),
+    rec('spline_h', 'Splines\\W\\RQ.sli', '1570351 1570353 1570398 244.3928 3.777444E-06 19.31274 366.6462 110 9995.227 0 -5.07E-09 -3.7E-09 0 0 0 0 90'.split(' ')),
+  ].join('\r\n');
+  const sp = parseTileSplines(text);
+  assert.equal(sp.length, 3);
+  assert.deepEqual([sp[0].path, sp[0].x, sp[0].y, sp[0].heading, sp[0].length, sp[0].radius, sp[0].mirror], ['Splines/W/trzy.sli', 272.3621, 7.955322, 366.6462, 230, 0, false]);
+  assert.equal(sp[1].mirror, true);
+  assert.equal(sp[2].radius, 9995.227);
+  // koniec pierwszego splinu = początek następnego na tej samej drodze (azymut od północy, zgodnie z zegarem)
+  const h = (366.6462 * Math.PI) / 180;
+  assert.ok(Math.abs(272.3621 + 230 * Math.sin(h) - 298.9817) < 0.01);
+  assert.ok(Math.abs(7.955322 + 230 * Math.cos(h) - 236.4097) < 0.01);
+
+  const sli = '[texture]\nt.bmp\n[profile]\n0\n[profilepnt]\n0.000\n0.100\n0.995\n0.167\n[profilepnt]\n4.550\n0.1\n0.005\n0.167\n[profilepnt]\n-4.550\n0.1\n0.9\n0.1\n[profilepnt]\n9.100\n0.1\n0.1\n0.1\n[path]\n0\n6.825\n0.1\n3.5\n0\n';
+  assert.deepEqual(sliExtent(sli), [-4.55, 9.1]);
+  const data = buildSplinesData([{ x: 1, y: 2, splines: sp }], () => [-4.55, 9.1]);
+  assert.equal(data.roads.length, 3);
+  assert.deepEqual(data.tiles[0].s[1].slice(0, 1).concat(data.tiles[0].s[1][6]), [1, 1]);
+});
