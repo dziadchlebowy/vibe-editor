@@ -16,6 +16,8 @@ export interface RawSpline {
   x: number;
   y: number;
   heading: number;
+  /** Wysokość początku splinu (m n.p.m. wg mapy) — im wyżej, tym spline jest na mapie bardziej na wierzchu. */
+  z: number;
   length: number;
   /** Promień łuku (m); 0 = prosta. */
   radius: number;
@@ -35,8 +37,9 @@ export function parseTileSplines(text: string): RawSpline[] {
     if (!rec || rec.length < 11) return;
     const p = normalizeAssetPath(rec[1]);
     const [x, y, heading, length, radius] = [5, 7, 8, 9, 10].map((i) => Number(rec![i].replace(',', '.')));
+    const z = Number(rec![6].replace(',', '.'));
     if (!p || ![x, y, heading, length, radius].every(Number.isFinite) || length <= 0) return;
-    out.push({ path: p, x, y, heading, length, radius, mirror: rec.slice(11).some((l) => l.toLowerCase() === 'mirror') });
+    out.push({ path: p, x, y, z: Number.isFinite(z) ? z : 0, heading, length, radius, mirror: rec.slice(11).some((l) => l.toLowerCase() === 'mirror') });
   };
   for (const line of splitLines(text)) {
     const t = line.trim();
@@ -97,7 +100,7 @@ export function buildSplinesData(tiles: TileSplines[], extentOf: (rel: string) =
         i = roads.push({ p: sp.path, a: r3(e[0]), b: r3(e[1]) }) - 1;
         idx.set(key, i);
       }
-      s.push([i, r3(sp.x), r3(sp.y), r3(sp.heading), r3(sp.length), r3(sp.radius), sp.mirror ? 1 : 0]);
+      s.push([i, r3(sp.x), r3(sp.y), r3(sp.heading), r3(sp.length), r3(sp.radius), sp.mirror ? 1 : 0, r3(sp.z)]);
     }
     outTiles.push({ x: t.x, y: t.y, s });
   }

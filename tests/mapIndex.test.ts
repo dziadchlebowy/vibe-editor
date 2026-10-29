@@ -342,6 +342,7 @@ test('mapSplines: wpisy [spline]/[spline_h] z prawdziwego kafla i zakres przekro
   assert.equal(sp.length, 3);
   assert.deepEqual([sp[0].path, sp[0].x, sp[0].y, sp[0].heading, sp[0].length, sp[0].radius, sp[0].mirror], ['Splines/W/trzy.sli', 272.3621, 7.955322, 366.6462, 230, 0, false]);
   assert.equal(sp[1].mirror, true);
+  assert.equal(sp[0].z, 3.762543e-6);
   assert.equal(sp[2].radius, 9995.227);
   // koniec pierwszego splinu = początek następnego na tej samej drodze (azymut od północy, zgodnie z zegarem)
   const h = (366.6462 * Math.PI) / 180;
@@ -353,4 +354,5 @@ test('mapSplines: wpisy [spline]/[spline_h] z prawdziwego kafla i zakres przekro
   const data = buildSplinesData([{ x: 1, y: 2, splines: sp }], () => [-4.55, 9.1]);
   assert.equal(data.roads.length, 3);
   assert.deepEqual(data.tiles[0].s[1].slice(0, 1).concat(data.tiles[0].s[1][6]), [1, 1]);
+  assert.equal(data.tiles[0].s[0][7], 0);
 });

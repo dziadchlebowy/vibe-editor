@@ -364,11 +364,18 @@ export class MapGrid {
     const mPx = scale / 300; // pikseli na metr
     ctx.lineCap = 'butt';
     ctx.lineJoin = 'round';
+    // widoczne spliny ze wszystkich kafli, rosnąco wg wysokości: wyższe rysujemy później, czyli na wierzchu
+    const visible: { left: number; top: number; s: number[] }[] = [];
     for (const t of data.tiles) {
       const left = this.sx(t.x - 0.5, w);
       const top = this.sy(t.y + 0.5, hh);
       if (left + scale < 0 || top + scale < 0 || left > w || top > hh) continue;
-      for (const [ri, lx, ly, hdg, len, radius, mirror] of t.s) {
+      for (const s of t.s) visible.push({ left, top, s });
+    }
+    visible.sort((p, q) => (p.s[7] ?? 0) - (q.s[7] ?? 0));
+    for (const { left, top, s } of visible) {
+      {
+        const [ri, lx, ly, hdg, len, radius, mirror] = s;
         const road = data.roads[ri];
         if (!road) continue;
         // środek przekroju względem osi splinu (po odbiciu zmienia stronę)

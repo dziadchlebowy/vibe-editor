@@ -175,7 +175,8 @@ export interface MapCatalog {
 
 /**
  * Spliny z kafli do narysowania na mapie. Każdy spline to krotka
- * [indeks drogi, x lokalny (m), y lokalny (m), azymut (° od północy), długość (m), promień (m, 0 = prosta), odbicie 0/1].
+ * [indeks drogi, x lokalny (m), y lokalny (m), azymut (° od północy), długość (m), promień (m, 0 = prosta), odbicie 0/1, wysokość początku (m)].
+ * Spliny z wyższą wysokością są rysowane później (na wierzchu).
  */
 export interface MapSplines {
   version: 1;
