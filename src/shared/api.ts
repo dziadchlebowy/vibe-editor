@@ -41,6 +41,11 @@ export interface VeApi {
 
   getConsoleHistory(): Promise<ConsoleLine[]>;
 
+  /** Okno bez natywnej ramki (motyw XP): własne przyciski minimalizuj / maksymalizuj / zamknij. */
+  windowControl(action: 'minimize' | 'maximize' | 'close'): Promise<void>;
+  isWindowMaximized(): Promise<boolean>;
+  onWindowState(cb: (maximized: boolean) => void): void;
+
   onConsoleLine(cb: (line: ConsoleLine) => void): void;
   onRunState(cb: (state: RunState) => void): void;
   onTasksChanged(cb: () => void): void;

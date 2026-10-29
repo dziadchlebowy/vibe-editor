@@ -39,8 +39,26 @@ function openModal(content: HTMLElement, closable: boolean, wide = false): () =>
       if (e.target === backdrop) close();
     });
   }
+  const title = content.querySelector('h2');
+  if (title && closable) {
+    const x = h('button', { class: 'wbtn wclose dlg-x', title: 'Zamknij', 'aria-label': 'Zamknij' });
+    x.addEventListener('click', close);
+    title.append(x);
+  }
   $('modal-root').append(backdrop);
   return close;
+}
+
+/** Pasek stanu (motyw XP): stan przetwarzania, liczba zadań i kafli. */
+function updateStatusBar(): void {
+  const text = $('status-text');
+  const busy = run.status === 'running';
+  text.classList.toggle('busy', busy);
+  text.textContent = busy ? 'Claude pracuje nad zadaniami…' : run.status === 'idle' ? 'Gotowe' : `Stan: ${run.status}`;
+  const active = tasks.filter((t) => t.status === 'active').length;
+  const rejected = tasks.filter((t) => t.status === 'rejected').length;
+  $('status-tasks').textContent = `Zadania: ${active}${rejected ? ` (odrzucone: ${rejected})` : ''}`;
+  $('status-map').textContent = overview ? `Kafle: ${overview.tiles.length}${mapBusy ? ' – indeksowanie…' : ''}` : '';
 }
 
 // --- stan ------------------------------------------------------------------
@@ -545,6 +563,7 @@ async function refreshTasks(): Promise<void> {
     .filter((t) => t.pin && t.status !== 'archived')
     .map((t) => ({ id: t.id, title: t.title, x: t.pin!.x, y: t.pin!.y }));
   mapGrid?.setPins(pins);
+  updateStatusBar();
 }
 
 // --- zakładka Mapa ---------------------------------------------------------
@@ -688,6 +707,7 @@ async function refreshMap(): Promise<void> {
   mapBusy = await ve.isMapIndexing();
   overview = await ve.getMapOverview();
   catalog = await ve.getCatalog();
+  updateStatusBar();
   mapGrid.setBusy(mapBusy);
   mapGrid.setData(overview);
   roadsView.setCatalog(catalog);
@@ -1021,7 +1041,21 @@ async function init(): Promise<void> {
   ve.onRunState((s) => {
     run = s;
     renderTasks();
+    updateStatusBar();
   });
+  const maxBtn = $('win-max');
+  $('win-min').addEventListener('click', () => void ve.windowControl('minimize'));
+  maxBtn.addEventListener('click', () => void ve.windowControl('maximize'));
+  $('win-close').addEventListener('click', () => void ve.windowControl('close'));
+  $('win-max').parentElement?.parentElement?.addEventListener('dblclick', (e) => {
+    if (!(e.target as HTMLElement).closest('.wbtn')) void ve.windowControl('maximize');
+  });
+  const setMax = (m: boolean): void => {
+    maxBtn.classList.toggle('restored', m);
+    maxBtn.title = m ? 'Przywróć' : 'Maksymalizuj';
+  };
+  ve.onWindowState(setMax);
+  setMax(await ve.isWindowMaximized());
   ve.onTasksChanged(() => void refreshTasks());
   ve.onOpenSettings(() => void openSettings(false));
   ve.onMapChanged(() => void refreshMap());
@@ -1031,6 +1065,7 @@ async function init(): Promise<void> {
   run = await ve.getRunState();
   await refreshTasks();
   await refreshMap();
+  updateStatusBar();
 
   const settings = await ve.getSettings();
   if (!settings.configured) await openSettings(true);

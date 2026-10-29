@@ -12,10 +12,18 @@
   </head>
   <body>
     <header class="topbar">
+      <span class="app-icon" aria-hidden="true">V</span>
       <div class="brand">VibeEditor</div>
-      <nav class="tabs" id="tabs"></nav>
-      <button class="icon-btn" id="settings-btn" title="Ustawienia (Ctrl+,)">⚙ Ustawienia</button>
+      <div class="winctl">
+        <button class="wbtn wmin" id="win-min" title="Minimalizuj" aria-label="Minimalizuj"></button>
+        <button class="wbtn wmax" id="win-max" title="Maksymalizuj" aria-label="Maksymalizuj"></button>
+        <button class="wbtn wclose" id="win-close" title="Zamknij" aria-label="Zamknij"></button>
+      </div>
     </header>
+    <div class="menubar">
+      <button class="menu-item" id="settings-btn" title="Ustawienia (Ctrl+,)">⚙ Ustawienia</button>
+    </div>
+    <nav class="tabs" id="tabs"></nav>
     <main>
       <section id="view-tasks" class="view"></section>
       <section id="view-map" class="view"></section>
@@ -23,6 +31,11 @@
       <section id="view-objects" class="view"></section>
       <section id="view-console" class="view"></section>
     </main>
+    <footer class="statusbar">
+      <span class="sb-cell sb-main" id="status-text">Gotowe</span>
+      <span class="sb-cell" id="status-tasks"></span>
+      <span class="sb-cell" id="status-map"></span>
+    </footer>
     <div id="modal-root"></div>
     <script src="renderer.js"></script>
   </body>

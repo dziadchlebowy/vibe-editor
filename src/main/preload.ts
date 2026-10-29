@@ -30,6 +30,12 @@ const api: VeApi = {
 
   getConsoleHistory: () => ipcRenderer.invoke('console:history'),
 
+  windowControl: (action) => ipcRenderer.invoke('win:control', action),
+  isWindowMaximized: () => ipcRenderer.invoke('win:isMaximized'),
+  onWindowState: (cb) => {
+    ipcRenderer.on('win:state', (_e, maximized: boolean) => cb(maximized));
+  },
+
   onConsoleLine: (cb) => {
     ipcRenderer.on('console:line', (_e, line: ConsoleLine) => cb(line));
   },

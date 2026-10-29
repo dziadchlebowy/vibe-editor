@@ -358,18 +358,20 @@ export class MapGrid {
       return;
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = '#0f1115';
+    ctx.fillStyle = this.css('--map-bg', '#5d7fcb');
     ctx.fillRect(0, 0, w, hh);
     if (!this.data) return;
 
-    const fill = this.css('--panel-2', '#262a33');
-    const accent = this.css('--accent', '#5b8def');
-    const danger = this.css('--danger', '#e5646b');
-    const muted = this.css('--muted', '#8b93a1');
+    const fill = this.css('--map-tile', '#f4f2e6');
+    const missingFill = this.css('--map-missing', '#ffd9d6');
+    const line = this.css('--map-line', '#8a8672');
+    const accent = this.css('--accent', '#316ac5');
+    const danger = this.css('--danger', '#c4161c');
+    const muted = this.css('--map-text', '#4b4a42');
     const scale = this.scale;
 
     ctx.lineWidth = 1;
-    ctx.font = `${Math.max(10, Math.min(15, scale / 5))}px "Segoe UI", sans-serif`;
+    ctx.font = `${Math.max(10, Math.min(15, scale / 5))}px Tahoma, "Segoe UI", sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
@@ -378,16 +380,16 @@ export class MapGrid {
       const top = this.sy(t.y + 0.5, hh);
       if (left + scale < 0 || top + scale < 0 || left > w || top > hh) continue;
       const isChosen = this.chosen.has(key(t.x, t.y));
-      ctx.fillStyle = t.exists ? fill : '#3a2226';
+      ctx.fillStyle = t.exists ? fill : missingFill;
       ctx.fillRect(left, top, scale, scale);
       if (isChosen) {
         ctx.fillStyle = accent + '59';
         ctx.fillRect(left, top, scale, scale);
       }
-      ctx.strokeStyle = isChosen ? accent : t.exists ? '#4a5160' : danger;
+      ctx.strokeStyle = isChosen ? accent : t.exists ? line : danger;
       ctx.strokeRect(Math.round(left) + 0.5, Math.round(top) + 0.5, Math.round(scale) - 1, Math.round(scale) - 1);
       if (scale >= 52) {
-        ctx.fillStyle = isChosen ? '#fff' : muted;
+        ctx.fillStyle = isChosen ? '#0a246a' : muted;
         ctx.fillText(`${t.x}, ${t.y}`, left + scale / 2, top + scale / 2);
       }
     }

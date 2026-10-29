@@ -234,8 +234,9 @@ function createWindow(): void {
     height: 760,
     minWidth: 820,
     minHeight: 560,
-    backgroundColor: '#16181d',
+    backgroundColor: '#ece9d8',
     title: 'VibeEditor',
+    frame: false, // pasek tytułu rysuje interfejs (motyw Windows XP)
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -244,6 +245,8 @@ function createWindow(): void {
     },
   });
   void win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  win.on('maximize', () => win?.webContents.send('win:state', true));
+  win.on('unmaximize', () => win?.webContents.send('win:state', false));
   win.on('closed', () => {
     win = null;
   });
@@ -367,6 +370,14 @@ function registerIpc(): void {
   });
 
   ipcMain.handle('console:history', () => consoleBuffer);
+
+  ipcMain.handle('win:control', (_e, action: string) => {
+    if (!win) return;
+    if (action === 'minimize') win.minimize();
+    else if (action === 'maximize') (win.isMaximized() ? win.unmaximize() : win.maximize());
+    else if (action === 'close') win.close();
+  });
+  ipcMain.handle('win:isMaximized', () => !!win?.isMaximized());
 }
 
 function buildMenu(): void {

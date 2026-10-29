@@ -71,3 +71,7 @@ Pinezka jest zapisana w jednostkach kafli (środek kafla (x, y) to dokładnie (x
 ## Do zrobienia
 
 - Kolejne rodzaje zadań.
+
+## Wygląd
+
+Interfejs stylizowany na Windows XP (motyw Luna): własny pasek tytułu z przyciskami okna (okno bez natywnej ramki), pasek menu, karty jak w oknie właściwości, okna dialogowe z niebieskim paskiem i pasek stanu. Kolory i czcionki są zmiennymi CSS na początku `src/renderer/styles.css`.
