@@ -17,6 +17,7 @@ import type {
 import { ObjectsView, RoadsView } from './assetViews.ts';
 import { $, clear, h } from './dom.ts';
 import { MapGrid, type GridPin } from './mapView.ts';
+import { TimetableView } from './timetableView.ts';
 
 const ve = window.ve;
 
@@ -63,7 +64,7 @@ function updateStatusBar(): void {
 
 // --- stan ------------------------------------------------------------------
 
-type TabId = 'tasks' | 'map' | 'roads' | 'objects' | 'console';
+type TabId = 'tasks' | 'map' | 'roads' | 'objects' | 'lines' | 'console';
 type TaskTab = 'active' | 'rejected' | 'archived';
 type ConsoleFilter = 'all' | 'git' | 'claude';
 
@@ -82,6 +83,7 @@ let pinMode = false;
 
 let mapGrid: MapGrid;
 let roadsView: RoadsView;
+let timetableView: TimetableView;
 let objectsView: ObjectsView;
 let mapSummary: HTMLElement;
 let pinBtn: HTMLButtonElement;
@@ -94,6 +96,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'map', label: 'Mapa' },
   { id: 'roads', label: 'Jezdnie' },
   { id: 'objects', label: 'Obiekty' },
+  { id: 'lines', label: 'Linie' },
   { id: 'console', label: 'Konsola' },
 ];
 
@@ -111,6 +114,7 @@ function renderTabs(): void {
             renderTabs();
             if (t.id === 'console') scrollConsoleToEnd();
             if (t.id === 'map') mapGrid?.show();
+            if (t.id === 'lines') void timetableView?.reload();
           },
         },
         t.label,
@@ -1031,6 +1035,11 @@ async function init(): Promise<void> {
   };
   roadsView = new RoadsView($('view-roads'), assetActions);
   objectsView = new ObjectsView($('view-objects'), assetActions);
+  timetableView = new TimetableView($('view-lines'), {
+    load: () => ve.loadTimetable(),
+    saveLine: (l) => ve.saveLine(l),
+    saveTrip: (t) => ve.saveTrip(t),
+  });
   renderConsole();
 
   document.addEventListener('click', () => {

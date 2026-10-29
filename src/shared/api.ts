@@ -1,5 +1,6 @@
 import type {
   ConsoleLine,
+  LineFile,
   InspectResult,
   MapCatalog,
   MapOverview,
@@ -10,6 +11,8 @@ import type {
   Settings,
   TaskInput,
   TaskView,
+  TimetableData,
+  TripFile,
 } from './types.ts';
 
 /** API wystawiane rendererowi przez preload jako window.ve. */
@@ -42,6 +45,11 @@ export interface VeApi {
   getMapSplines(): Promise<MapSplines | null>;
 
   getConsoleHistory(): Promise<ConsoleLine[]>;
+
+  /** Linie (.ttl) i kursy (.ttp) z folderu mapy. */
+  loadTimetable(): Promise<TimetableData>;
+  saveLine(line: LineFile): Promise<OkResult>;
+  saveTrip(trip: TripFile): Promise<OkResult>;
 
   /** Okno bez natywnej ramki (motyw XP): własne przyciski minimalizuj / maksymalizuj / zamknij. */
   windowControl(action: 'minimize' | 'maximize' | 'close'): Promise<void>;

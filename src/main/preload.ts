@@ -31,6 +31,10 @@ const api: VeApi = {
 
   getConsoleHistory: () => ipcRenderer.invoke('console:history'),
 
+  loadTimetable: () => ipcRenderer.invoke('tt:load'),
+  saveLine: (line) => ipcRenderer.invoke('tt:saveLine', line),
+  saveTrip: (trip) => ipcRenderer.invoke('tt:saveTrip', trip),
+
   windowControl: (action) => ipcRenderer.invoke('win:control', action),
   isWindowMaximized: () => ipcRenderer.invoke('win:isMaximized'),
   onWindowState: (cb) => {

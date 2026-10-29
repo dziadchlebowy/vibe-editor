@@ -184,3 +184,64 @@ export interface MapSplines {
   roads: { p: string; a: number; b: number }[];
   tiles: { x: number; y: number; s: number[][] }[];
 }
+
+// --- linie i rozkłady (TTData: .ttl linie, .ttp kursy) ----------------------------
+
+/** Kurs dodany do brygady linii ([addtrip]); czas startu w minutach od północy. */
+export interface LineTrip {
+  /** Nazwa pliku kursu (.ttp) bez rozszerzenia. */
+  trip: string;
+  /** Druga linijka wpisu (w próbkach zawsze 0) — zachowywana bez zmian. */
+  flag: string;
+  start: number;
+  /** Dodatkowe linijki wpisu, zachowywane bez zmian. */
+  extra: string[];
+}
+
+/** Brygada ([newtour]). */
+export interface LineTour {
+  number: string;
+  /** Linijki nagłówka po numerze: pierwsza to typ pojazdu (np. „PKS 12m”), reszta zachowywana. */
+  header: string[];
+  trips: LineTrip[];
+}
+
+export interface LineFile {
+  /** Ścieżka względem folderu mapy, separator „/”. */
+  file: string;
+  /** Nazwa bez rozszerzenia. */
+  name: string;
+  tours: LineTour[];
+}
+
+export interface TripStation {
+  id: string;
+  index: number;
+  name: string;
+}
+
+/** Profil czasowy kursu; czasy w minutach od startu kursu, klucz = numer przystanku (od 0). */
+export interface TripProfile {
+  name: string;
+  total: number;
+  arr: Record<number, number>;
+  dep: Record<number, number>;
+  /** [profile_otherstopping]: liczba całkowita (np. 1, 3, 4). */
+  stop: Record<number, number>;
+}
+
+export interface TripFile {
+  file: string;
+  name: string;
+  /** [trip]: nazwa wewnętrzna, tytuł (cel), numer linii. */
+  internalName: string;
+  title: string;
+  line: string;
+  stations: TripStation[];
+  profiles: TripProfile[];
+}
+
+export interface TimetableData {
+  lines: LineFile[];
+  trips: TripFile[];
+}

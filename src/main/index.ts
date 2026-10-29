@@ -5,11 +5,13 @@ import path from 'node:path';
 import type {
   ConsoleLine,
   InspectResult,
+  LineFile,
   OkResult,
   RunState,
   SaveRequest,
   Settings,
   TaskInput,
+  TripFile,
 } from '../shared/types.ts';
 import { ClaudeRunner } from './core/claude.ts';
 import { parseChatUrl, sendPromptToClaudeApp } from './core/claudeFree.ts';
@@ -18,6 +20,7 @@ import { findMapFolders, writeMapInfo } from './core/globalCfg.ts';
 import { applyFailed, clearFailed, writeLastRun } from './core/failed.ts';
 import { GitRunner, setupRepo, syncToRemote } from './core/git.ts';
 import { assetsDir, buildMapIndex, loadMapIndex, toCatalog, toOverview } from './core/mapIndex.ts';
+import { loadTimetable, saveLine, saveTrip } from './core/timetable.ts';
 import { loadMapSplines } from './core/mapSplines.ts';
 import { ensureSliGuide } from './core/sliGuide.ts';
 import { buildPrompt, writePromptFile } from './core/promptBuilder.ts';
@@ -370,6 +373,27 @@ function registerIpc(): void {
   ipcMain.handle('map:catalog', () => {
     const idx = settings.workDir ? loadMapIndex(settings.workDir) : null;
     return idx && idx.mapFolder === settings.mapFolder ? toCatalog(idx) : { roads: [], objects: [] };
+  });
+
+  const mapDir = (): string | null =>
+    settings.workDir && settings.mapFolder ? path.join(settings.workDir, settings.mapFolder) : null;
+  ipcMain.handle('tt:load', () => {
+    const d = mapDir();
+    return d ? loadTimetable(d) : { lines: [], trips: [] };
+  });
+  ipcMain.handle('tt:saveLine', (_e, line: LineFile) => {
+    const d = mapDir();
+    if (!d) return { ok: false, error: 'Brak skonfigurowanej mapy.' };
+    const r = saveLine(d, line);
+    if (r.ok) emit('app', `Zapisano linię: ${line.file}`);
+    return r;
+  });
+  ipcMain.handle('tt:saveTrip', (_e, trip: TripFile) => {
+    const d = mapDir();
+    if (!d) return { ok: false, error: 'Brak skonfigurowanej mapy.' };
+    const r = saveTrip(d, trip);
+    if (r.ok) emit('app', `Zapisano kurs: ${trip.file}`);
+    return r;
   });
 
   ipcMain.handle('map:splines', () => (settings.workDir ? loadMapSplines(settings.workDir) : null));
