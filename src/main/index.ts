@@ -22,6 +22,7 @@ import { GitRunner, setupRepo, syncToRemote } from './core/git.ts';
 import { assetsDir, buildMapIndex, loadMapIndex, toCatalog, toOverview } from './core/mapIndex.ts';
 import { loadTimetable, saveLine, saveTrip } from './core/timetable.ts';
 import { loadMapSplines } from './core/mapSplines.ts';
+import { loadObjPaths } from './core/mapObjPaths.ts';
 import { loadMapStops, saveStopParams, updateStopsCache } from './core/mapStops.ts';
 import { ensureSliGuide } from './core/sliGuide.ts';
 import { buildPrompt, writePromptFile } from './core/promptBuilder.ts';
@@ -171,6 +172,7 @@ async function saveAll(req: SaveRequest): Promise<OkResult> {
       claudePath: req.claudePath.trim(),
       claudeChatUrl,
       claudeAutoSend: req.claudeAutoSend,
+      splineMaxWidth: Number.isFinite(req.splineMaxWidth) && req.splineMaxWidth > 0 ? req.splineMaxWidth : 0,
       configured: true,
     };
     saveSettings(settingsFile(), settings);
@@ -397,6 +399,7 @@ function registerIpc(): void {
     return r;
   });
 
+  ipcMain.handle('map:objpaths', () => (settings.workDir ? loadObjPaths(settings.workDir) : null));
   ipcMain.handle('map:stops', () => (settings.workDir ? loadMapStops(settings.workDir) : null));
   ipcMain.handle('map:saveStop', (_e, tileFile: string, id: string, params: string[]) => {
     const d = mapDir();

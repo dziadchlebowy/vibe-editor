@@ -1,5 +1,5 @@
 import { toParams } from '../shared/busStop.ts';
-import type { MapOverview, MapSplines, MapStops, MapTileView, TaskPin, TileCoord } from '../shared/types.ts';
+import type { MapObjPaths, MapOverview, MapSplines, MapStops, MapTileView, TaskPin, TileCoord } from '../shared/types.ts';
 import { clear, h } from './dom.ts';
 
 /**
@@ -54,7 +54,9 @@ export class MapGrid {
   private pins: GridPin[] = [];
   private splines: MapSplines | null = null;
   private roadColors: string[] = [];
-  private layers = { paths: false, stops: false };
+  private layers = { paths: false, stops: false, splines: true };
+  private maxWidth = 0;
+  private objPaths: MapObjPaths | null = null;
   private stops: MapStops | null = null;
   private tip: HTMLElement;
   private selectedTile: MapTileView | null = null;
@@ -118,9 +120,21 @@ export class MapGrid {
   }
 
   /** Warstwy dodatkowe: ścieżki ruchu ze splinów (rysowane na wierzchu splinów). */
-  setLayers(l: { paths: boolean; stops: boolean }): void {
+  setLayers(l: { paths: boolean; stops: boolean; splines: boolean }): void {
     this.layers = { ...l };
     this.tip.hidden = true;
+    this.draw();
+  }
+
+  /** Próg szerokości splinów (m): szersze nie są rysowane; 0 = bez limitu. */
+  setSplineMaxWidth(m: number): void {
+    this.maxWidth = m > 0 ? m : 0;
+    this.draw();
+  }
+
+  /** Ścieżki ruchu z obiektów (.sco) rozmieszczonych na kaflach. */
+  setObjPaths(data: MapObjPaths | null): void {
+    this.objPaths = data;
     this.draw();
   }
 
@@ -166,6 +180,54 @@ export class MapGrid {
     this.tip.textContent = hit.sub ? `${hit.name} (${hit.sub})` : hit.name;
     this.tip.style.left = `${Math.min(px + 14, r.width - 160)}px`;
     this.tip.style.top = `${Math.max(4, py - 30)}px`;
+  }
+
+  /**
+   * Ścieżki ruchu z obiektów (.sco), np. skrzyżowań: łuk od punktu (x, y) obiektu, azymut ° od północy zgodnie z zegarem,
+   * promień ujemny = w lewo. Cały obiekt obracany o jego obrót (założenie: ten sam układ azymutu co w splinach).
+   */
+  private drawObjPaths(w: number, hh: number): void {
+    const data = this.objPaths;
+    if (!this.layers.paths || !data) return;
+    const ctx = this.ctx;
+    const mPx = this.scale / 300;
+    for (const pass of [0, 1]) {
+      ctx.strokeStyle = pass === 0 ? '#ffffff' : '#ff1fd0';
+      ctx.lineWidth = pass === 0 ? 3.4 : 1.6;
+      ctx.lineCap = 'butt';
+      for (const t of data.tiles) {
+        const left = this.sx(t.x - 0.5, w);
+        const top = this.sy(t.y + 0.5, hh);
+        if (left + this.scale < -50 || top + this.scale < -50 || left > w + 50 || top > hh + 50) continue;
+        for (const [di, ox, oy, rot] of t.o) {
+          const def = data.defs[di];
+          if (!def) continue;
+          const r = (rot * Math.PI) / 180;
+          const cr = Math.cos(r);
+          const sr = Math.sin(r);
+          for (const [x, y, hdg, radius, len] of def.t) {
+            const k = radius !== 0 ? 1 / radius : 0;
+            const phi0 = (hdg * Math.PI) / 180;
+            const steps = k === 0 ? 1 : Math.max(1, Math.ceil(Math.abs(len * k) / (Math.PI / 24)));
+            ctx.beginPath();
+            for (let i = 0; i <= steps; i++) {
+              const sLen = (len * i) / steps;
+              const phi = phi0 + k * sLen;
+              const lx = x + (k === 0 ? Math.sin(phi0) * sLen : (Math.cos(phi0) - Math.cos(phi)) / k);
+              const ly = y + (k === 0 ? Math.cos(phi0) * sLen : (Math.sin(phi) - Math.sin(phi0)) / k);
+              // obrót zgodny z ruchem wskazówek zegara o `rot`, potem przesunięcie do pozycji obiektu
+              const wx = ox + lx * cr + ly * sr;
+              const wy = oy - lx * sr + ly * cr;
+              const px = left + wx * mPx;
+              const py = top + (300 - wy) * mPx;
+              if (i === 0) ctx.moveTo(px, py);
+              else ctx.lineTo(px, py);
+            }
+            ctx.stroke();
+          }
+        }
+      }
+    }
   }
 
   private drawStops(w: number, hh: number): void {
@@ -490,9 +552,10 @@ export class MapGrid {
         else ctx.lineTo(px, py);
       }
     };
-    for (const { left, top, s } of visible) {
+    for (const { left, top, s } of this.layers.splines ? visible : []) {
       const road = data.roads[s[0]];
       if (!road) continue;
+      if (this.maxWidth > 0 && road.b - road.a > this.maxWidth) continue;
       // środek przekroju względem osi splinu (po odbiciu zmienia stronę)
       trace(left, top, s, ((road.a + road.b) / 2) * (s[6] ? -1 : 1));
       ctx.strokeStyle = this.roadColors[s[0]] ?? '#444';
@@ -567,6 +630,7 @@ export class MapGrid {
     }
 
     this.drawSplines(w, hh);
+    this.drawObjPaths(w, hh);
     this.drawStops(w, hh);
 
     if (this.selectedTile && this.opts.mode === 'info') {

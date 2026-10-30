@@ -668,10 +668,16 @@ function setPinMode(on: boolean): void {
   updateMapToolbar();
 }
 
-const mapLayers = { paths: false, stops: false };
+const mapLayers = { paths: false, stops: false, splines: true };
+
+async function applyMapSettings(): Promise<void> {
+  const s = await ve.getSettings();
+  mapGrid?.setSplineMaxWidth(s.splineMaxWidth);
+}
 
 function layerBox(label: string, title: string, key: keyof typeof mapLayers): HTMLElement {
   const cb = h('input', { type: 'checkbox', checked: mapLayers[key] });
+  cb.title = title;
   cb.addEventListener('change', () => {
     mapLayers[key] = cb.checked;
     mapGrid.setLayers(mapLayers);
@@ -782,6 +788,7 @@ function mountMapTab(): void {
       h('button', { class: 'btn', onClick: () => mapGrid.fit() }, 'Wycentruj'),
       pinBtn,
       rescanBtn,
+      layerBox('Spliny', 'Rysuj spliny (jezdnie)', 'splines'),
       layerBox('Ścieżki', 'Ścieżki ruchu ze splinów (po przeskanowaniu mapy)', 'paths'),
       layerBox('Przystanki', 'Przystanki (obiekty z [busstop]); najedź, by zobaczyć nazwę, kliknij, by edytować', 'stops'),
       h('div', { class: 'spacer' }),
@@ -802,6 +809,8 @@ async function refreshMap(): Promise<void> {
   splinesData = await ve.getMapSplines();
   mapGrid.setSplines(splinesData);
   mapGrid.setStops(await ve.getMapStops());
+  mapGrid.setObjPaths(await ve.getMapObjPaths());
+  await applyMapSettings();
   roadsView.setCatalog(catalog);
   objectsView.setCatalog(catalog);
   updateMapToolbar();
@@ -905,6 +914,7 @@ async function openSettings(forced: boolean): Promise<void> {
     value: cur.claudeChatUrl,
     placeholder: 'https://claude.ai/chat/ID-CZATU',
   });
+  const splineWidthInput = h('input', { type: 'text', value: cur.splineMaxWidth > 0 ? String(cur.splineMaxWidth) : '', placeholder: 'bez limitu' });
   const autoSendCheck = h('input', { type: 'checkbox', checked: cur.claudeAutoSend });
   const error = h('div', { class: 'error' });
 
@@ -1059,6 +1069,14 @@ async function openSettings(forced: boolean): Promise<void> {
     h(
       'div',
       { class: 'field' },
+      h('label', {}, 'Mapa: wyświetlaj spliny nie szersze niż (m)'),
+      splineWidthInput,
+      h('div', { class: 'hint' }, 'Szersze spliny (np. podłoże, tereny) nie będą rysowane na mapie. Puste lub 0 = bez limitu.'),
+    ),
+    h('hr', { class: 'sep' }),
+    h(
+      'div',
+      { class: 'field' },
       h('label', {}, 'Claude'),
       h('label', { class: 'check' }, modeCode, 'Claude Code'),
       h('label', { class: 'check' }, modeFree, 'Claude Free'),
@@ -1099,6 +1117,7 @@ async function openSettings(forced: boolean): Promise<void> {
       claudePath: claudeInput.value,
       claudeChatUrl: chatInput.value,
       claudeAutoSend: autoSendCheck.checked,
+      splineMaxWidth: Number(splineWidthInput.value.trim().replace(',', '.')) || 0,
     });
     okBtn.disabled = false;
     cancelBtn.disabled = false;
@@ -1109,6 +1128,7 @@ async function openSettings(forced: boolean): Promise<void> {
     }
     finish();
     await refreshTasks();
+    await applyMapSettings();
   });
 }
 

@@ -24,6 +24,8 @@ export interface Settings {
   claudeChatUrl: string;
   /** Claude Free: czy po wklejeniu prompta automatycznie go wysłać (Enter). */
   claudeAutoSend: boolean;
+  /** Mapa: nie rysuj splinów szerszych niż tyle metrów (0 = bez limitu). */
+  splineMaxWidth: number;
   configured: boolean;
 }
 
@@ -54,6 +56,7 @@ export interface SaveRequest {
   claudePath: string;
   claudeChatUrl: string;
   claudeAutoSend: boolean;
+  splineMaxWidth: number;
 }
 
 export interface OkResult {
@@ -157,6 +160,15 @@ export interface MapStops {
     file: string;
     s: { id: string; x: number; y: number; rot: number; /** 7 linijek parametrów (patrz shared/busStop.ts) */ p: string[] }[];
   }[];
+}
+
+/** Ścieżki ruchu z obiektów (.sco): definicje wspólne dla obiektów tego samego pliku + ich rozmieszczenie na kaflach. */
+export interface MapObjPaths {
+  version: 1;
+  /** t: krotki [x, y, azymut °, promień m, długość m] w układzie obiektu. */
+  defs: { p: string; t: number[][] }[];
+  /** o: krotki [indeks definicji, x, y, obrót °] — pozycja obiektu na kaflu (m od rogu kafla). */
+  tiles: { x: number; y: number; o: number[][] }[];
 }
 
 /** Jezdnia = spline użyty na mapie. */

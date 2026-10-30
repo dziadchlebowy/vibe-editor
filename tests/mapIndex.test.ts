@@ -410,3 +410,27 @@ test('przystanki: wpis [object] z parametrami, rozpoznanie [busstop], zapis w pl
   assert.match(validateParams({ ...p, zone: '5' }) ?? '', /Strefa/);
   assert.equal(stripPolish('Dąbrowska Wiślana żółć'), 'Dabrowska Wislana zolc');
 });
+
+test('ścieżki z .sco: [path] (x, y, wysokość, azymut, promień, długość) i rozmieszczenie obiektów na kaflach', async () => {
+  const { scoPaths, buildObjPathsData } = await import('../src/main/core/mapObjPaths.ts');
+  const sco = [
+    '[friendlyname]', 'Skrzyzowanie', '',
+    '[path]', '0', '-0.5', '0.8', '0', '0', '1', '0', '0', '0', '2.5', '0', '1', '',
+    '[use_traffic_light]', '0', '',
+    '[path]', '-0.006', '13.13', '0.8', '-0.03', '-122.234199523926', '63.8700981140137', '0', '0', '0', '2.5', '0', '1', '',
+    '[path]', '1', '1', '0', '0', '0', '0', '', // długość 0 → pomijana
+  ].join('\r\n');
+  const p = scoPaths(sco);
+  assert.deepEqual(p, [[0, -0.5, 0, 0, 1], [-0.006, 13.13, -0.03, -122.234, 63.87]]);
+  // ujemny promień = w lewo: po ~64 m łuku azymut maleje o ~30°
+  assert.ok(Math.abs((63.87 / -122.234) * (180 / Math.PI) + 29.94) < 0.1);
+  const data = buildObjPathsData(
+    [{ x: 2, y: 3, file: 'a.map', objects: [
+      { path: 'Sceneryobjects/X/k.sco', id: '1', x: 10, y: 20, rot: 93.5, params: [] },
+      { path: 'Sceneryobjects/X/drzewo.sco', id: '2', x: 1, y: 1, rot: 0, params: [] },
+      { path: 'Sceneryobjects/X/k.sco', id: '3', x: 30, y: 40, rot: 0, params: [] } ] }],
+    (rel) => (rel.endsWith('k.sco') ? p : []),
+  );
+  assert.equal(data.defs.length, 1);
+  assert.deepEqual(data.tiles[0].o, [[0, 10, 20, 93.5], [0, 30, 40, 0]]);
+});

@@ -12,6 +12,7 @@ export const DEFAULT_SETTINGS: Settings = {
   claudePath: '',
   claudeChatUrl: '',
   claudeAutoSend: true,
+  splineMaxWidth: 0,
   configured: false,
 };
 

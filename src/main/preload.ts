@@ -29,6 +29,7 @@ const api: VeApi = {
   getCatalog: () => ipcRenderer.invoke('map:catalog'),
   getMapSplines: () => ipcRenderer.invoke('map:splines'),
   getMapStops: () => ipcRenderer.invoke('map:stops'),
+  getMapObjPaths: () => ipcRenderer.invoke('map:objpaths'),
   saveStop: (tileFile, id, params) => ipcRenderer.invoke('map:saveStop', tileFile, id, params),
 
   getConsoleHistory: () => ipcRenderer.invoke('console:history'),

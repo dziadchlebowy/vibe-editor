@@ -5,6 +5,7 @@ import type {
   MapCatalog,
   MapOverview,
   MapSplines,
+  MapObjPaths,
   MapStops,
   OkResult,
   RunState,
@@ -45,6 +46,7 @@ export interface VeApi {
   getCatalog(): Promise<MapCatalog>;
   getMapSplines(): Promise<MapSplines | null>;
   getMapStops(): Promise<MapStops | null>;
+  getMapObjPaths(): Promise<MapObjPaths | null>;
   /** Zapisuje 7 linijek parametrów przystanku (obiekt o danym ID) w pliku kafla. */
   saveStop(tileFile: string, id: string, params: string[]): Promise<OkResult>;
 

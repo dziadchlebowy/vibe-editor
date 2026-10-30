@@ -12,6 +12,7 @@ import {
   splinesPath,
   type TileSplines,
 } from './mapSplines.ts';
+import { buildObjPathsData, objPathsFile, scoPathsFromAssets } from './mapObjPaths.ts';
 import { buildStopsData, busStopChecker, parseTileObjects, stopsPath, type TileObjects } from './mapStops.ts';
 
 export interface TileRef {
@@ -386,6 +387,10 @@ export async function buildMapIndex(o: BuildOptions): Promise<MapIndex> {
   );
   fs.writeFileSync(stopsPath(o.workDir), JSON.stringify(stopsData), 'utf-8');
   o.emit('app', `Przystanków na mapie: ${stopsData.tiles.reduce((n, t) => n + t.s.length, 0)}.`);
+
+  const objPaths = buildObjPathsData(tileObjects, scoPathsFromAssets(dstRoot));
+  fs.writeFileSync(objPathsFile(o.workDir), JSON.stringify(objPaths), 'utf-8');
+  o.emit('app', `Obiektów ze ścieżkami ruchu: ${objPaths.tiles.reduce((n, t) => n + t.o.length, 0)}.`);
 
   tileSplines.sort((a, b) => a.y - b.y || a.x - b.x);
   const splineData = buildSplinesData(tileSplines, extentFromAssets(dstRoot), pathsFromAssets(dstRoot));
