@@ -22,6 +22,7 @@ import { GitRunner, setupRepo, syncToRemote } from './core/git.ts';
 import { assetsDir, buildMapIndex, loadMapIndex, toCatalog, toOverview } from './core/mapIndex.ts';
 import { loadTimetable, saveLine, saveTrip } from './core/timetable.ts';
 import { loadMapSplines } from './core/mapSplines.ts';
+import { loadMapStops, saveStopParams, updateStopsCache } from './core/mapStops.ts';
 import { ensureSliGuide } from './core/sliGuide.ts';
 import { buildPrompt, writePromptFile } from './core/promptBuilder.ts';
 import { loadSettings, saveSettings, targetBranch, vibeDir } from './core/settings.ts';
@@ -396,6 +397,17 @@ function registerIpc(): void {
     return r;
   });
 
+  ipcMain.handle('map:stops', () => (settings.workDir ? loadMapStops(settings.workDir) : null));
+  ipcMain.handle('map:saveStop', (_e, tileFile: string, id: string, params: string[]) => {
+    const d = mapDir();
+    if (!d) return { ok: false, error: 'Brak skonfigurowanej mapy.' };
+    const r = saveStopParams(d, tileFile, id, params);
+    if (r.ok) {
+      updateStopsCache(settings.workDir, tileFile, id, params);
+      emit('app', `Zapisano przystanek ${id} (${params[0]}) w ${tileFile}.`);
+    }
+    return r;
+  });
   ipcMain.handle('map:splines', () => (settings.workDir ? loadMapSplines(settings.workDir) : null));
 
   ipcMain.handle('console:history', () => consoleBuffer);

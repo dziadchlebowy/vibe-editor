@@ -17,7 +17,8 @@ import type {
 
 import { ObjectsView, RoadsView } from './assetViews.ts';
 import { $, clear, h } from './dom.ts';
-import { MapGrid, type GridPin } from './mapView.ts';
+import { MapGrid, type GridPin, type GridStop } from './mapView.ts';
+import { ZONES, fromParams, hasPolishChars, toParams, validateParams, type StopParams } from '../shared/busStop.ts';
 import { TimetableView } from './timetableView.ts';
 
 const ve = window.ve;
@@ -667,7 +668,7 @@ function setPinMode(on: boolean): void {
   updateMapToolbar();
 }
 
-const mapLayers = { paths: false };
+const mapLayers = { paths: false, stops: false };
 
 function layerBox(label: string, title: string, key: keyof typeof mapLayers): HTMLElement {
   const cb = h('input', { type: 'checkbox', checked: mapLayers[key] });
@@ -678,11 +679,79 @@ function layerBox(label: string, title: string, key: keyof typeof mapLayers): HT
   return h('label', { class: 'tt-check', title }, cb, label);
 }
 
+/** Okno edycji parametrów przystanku (zapis do pliku kafla .map). */
+function openStopDialog(stop: GridStop): void {
+  const p = toParams(stop.p);
+  const err = h('div', { class: 'error' });
+  const mk = (key: keyof StopParams, label: string, hint?: string): HTMLElement[] => {
+    const input = h('input', { type: 'text', value: p[key] });
+    input.addEventListener('input', () => {
+      p[key] = input.value;
+      if (key === 'name') warn.textContent = hasPolishChars(p.name) ? 'Nazwa zawiera polskie znaki — zalecane ich unikanie.' : '';
+    });
+    return hint ? [h('label', {}, label), input, h('div', { class: 'hint' }, hint)] : [h('label', {}, label), input];
+  };
+  const warn = h('div', { class: 'hint' });
+  const zone = h('select', {}, h('option', { value: '' }, '(puste)'), ...ZONES.map((z) => h('option', { value: z.value, selected: z.value === p.zone }, z.label)));
+  zone.addEventListener('change', () => (p.zone = zone.value));
+  const close = openModal(
+    h(
+      'div',
+      { class: 'dialog' },
+      h('h2', {}, `Przystanek ${stop.id}`),
+      h(
+        'div',
+        { class: 'stop-grid' },
+        ...mk('name', 'Nazwa'),
+        warn,
+        ...mk('maxPassengers', 'Maks. pasażerów', 'Maksymalna liczba pasażerów na przystanku.'),
+        ...mk('minPassengers', 'Min. pasażerów', 'Minimalna liczba pasażerów na przystanku.'),
+        ...mk('exitPassengers', 'Wyjście pasażerów', 'Ilu maksymalnie pasażerów może wysiąść (nie dotyczy końcowych).'),
+        ...mk('dockLength', 'Długość dokowania (m)', 'Długość przystanku / platformy w metrach.'),
+        h('label', {}, 'Strefa wyjścia/wejścia'),
+        zone,
+        ...mk('subName', 'Podnazwa (opcjonalnie)', 'Druga nazwa przystanku, np. słupek.'),
+      ),
+      err,
+      h(
+        'div',
+        { class: 'modal-actions' },
+        h('button', { class: 'btn', onClick: () => close() }, 'Anuluj'),
+        h(
+          'button',
+          {
+            class: 'btn primary',
+            onClick: async () => {
+              p.name = p.name.trim();
+              const bad = validateParams(p);
+              if (bad) {
+                err.textContent = bad;
+                return;
+              }
+              const r = await ve.saveStop(stop.tileFile, stop.id, fromParams(p));
+              if (!r.ok) {
+                err.textContent = r.error ?? 'Nie udało się zapisać.';
+                return;
+              }
+              close();
+              mapGrid.setStops(await ve.getMapStops());
+            },
+          },
+          'Zapisz',
+        ),
+      ),
+    ),
+    true,
+  );
+  warn.textContent = hasPolishChars(p.name) ? 'Nazwa zawiera polskie znaki — zalecane ich unikanie.' : '';
+}
+
 function mountMapTab(): void {
   const root = $('view-map');
   clear(root);
   mapGrid = new MapGrid({
     mode: 'info',
+    onStopClick: (s) => openStopDialog(s),
     onPinPlaced: (p) => {
       // punkt wskazany: wracamy do zwykłego trybu i otwieramy nowe zadanie z tą pinezką
       setPinMode(false);
@@ -714,6 +783,7 @@ function mountMapTab(): void {
       pinBtn,
       rescanBtn,
       layerBox('Ścieżki', 'Ścieżki ruchu ze splinów (po przeskanowaniu mapy)', 'paths'),
+      layerBox('Przystanki', 'Przystanki (obiekty z [busstop]); najedź, by zobaczyć nazwę, kliknij, by edytować', 'stops'),
       h('div', { class: 'spacer' }),
       mapSummary,
     ),
@@ -731,6 +801,7 @@ async function refreshMap(): Promise<void> {
   mapGrid.setData(overview);
   splinesData = await ve.getMapSplines();
   mapGrid.setSplines(splinesData);
+  mapGrid.setStops(await ve.getMapStops());
   roadsView.setCatalog(catalog);
   objectsView.setCatalog(catalog);
   updateMapToolbar();

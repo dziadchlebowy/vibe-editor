@@ -368,3 +368,45 @@ test('mapSplines: ścieżki ruchu z [path] w .sli trafiają do dróg', async () 
   );
   assert.equal(d.roads[0].t?.length, 2);
 });
+
+test('przystanki: wpis [object] z parametrami, rozpoznanie [busstop], zapis w pliku kafla zachowuje resztę i kodowanie', async () => {
+  const { parseTileObjects, isBusStopSco, buildStopsData, saveStopParams } = await import('../src/main/core/mapStops.ts');
+  const { toParams, validateParams, fromParams, stripPolish } = await import('../src/shared/busStop.ts');
+  const NL = '\r\n';
+  const tile = [
+    '[object]', '0', 'Sceneryobjects\\Kamaz_Objects\\Forest_Back.sco', '1570034', '2.138794', '200.4326', '-5', '93.59305', '0', '0', '0', '',
+    '[object]', '0', 'Sceneryobjects\\Generic\\bus_stop.sco', '1575727', '51.88647', '237.666', '0', '186.1048', '0', '0', '7',
+    'Podroznicza NZ', '2', '0', '', '30', '0', '', '',
+    '[attachObj]', '0', 'Sceneryobjects\\Warszawa2008\\Przystanek\\nazwa.sco', '1570020', '1570018', '0', '5', '0', '0', '0', '1', 'PODRozNICZA 01', '',
+  ].join(NL);
+  const objs = parseTileObjects(tile);
+  assert.equal(objs.length, 2);
+  assert.deepEqual([objs[1].id, objs[1].x, objs[1].y, objs[1].rot], ['1575727', 51.88647, 237.666, 186.1048]);
+  assert.deepEqual(objs[1].params, ['Podroznicza NZ', '2', '0', '', '30', '0', '']);
+  assert.deepEqual(objs[0].params, []);
+  assert.ok(isBusStopSco('[friendlyname]\nx\n[busstop]\n1 2 3\n') && !isBusStopSco('[groups]\n0\n'));
+  const data = buildStopsData([{ x: 1, y: 2, file: 'Tiles/t.map', objects: objs }], (p) => p.endsWith('bus_stop.sco'));
+  assert.equal(data.tiles[0].s.length, 1);
+  assert.deepEqual(toParams(data.tiles[0].s[0].p), { name: 'Podroznicza NZ', maxPassengers: '2', minPassengers: '0', exitPassengers: '', dockLength: '30', zone: '0', subName: '' });
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 've-stop-'));
+  fs.mkdirSync(path.join(dir, 'Tiles'));
+  fs.writeFileSync(path.join(dir, 'Tiles', 't.map'), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(tile, 'utf16le')]));
+  const p = toParams(data.tiles[0].s[0].p);
+  p.name = 'Nowa nazwa';
+  p.maxPassengers = '9';
+  p.subName = '01';
+  assert.equal(validateParams(p), null);
+  assert.deepEqual(saveStopParams(dir, 'Tiles/t.map', '1575727', fromParams(p)), { ok: true });
+  const raw = fs.readFileSync(path.join(dir, 'Tiles', 't.map'));
+  assert.deepEqual([raw[0], raw[1]], [0xff, 0xfe]);
+  const after = raw.subarray(2).toString('utf16le');
+  assert.equal(after, tile.replace('Podroznicza NZ\r\n2\r\n0\r\n\r\n30\r\n0\r\n\r\n', 'Nowa nazwa\r\n9\r\n0\r\n\r\n30\r\n0\r\n01\r\n'));
+  assert.equal(saveStopParams(dir, 'Tiles/t.map', '999', fromParams(p)).ok, false);
+  assert.equal(saveStopParams(dir, '../x.map', '1575727', fromParams(p)).ok, false);
+
+  assert.match(validateParams({ ...p, name: '' }) ?? '', /nazw/);
+  assert.match(validateParams({ ...p, minPassengers: '10' }) ?? '', /Minimum/);
+  assert.match(validateParams({ ...p, zone: '5' }) ?? '', /Strefa/);
+  assert.equal(stripPolish('Dąbrowska Wiślana żółć'), 'Dabrowska Wislana zolc');
+});

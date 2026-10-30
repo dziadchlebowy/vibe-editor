@@ -1,4 +1,5 @@
-import type { MapOverview, MapSplines, MapTileView, TaskPin, TileCoord } from '../shared/types.ts';
+import { toParams } from '../shared/busStop.ts';
+import type { MapOverview, MapSplines, MapStops, MapTileView, TaskPin, TileCoord } from '../shared/types.ts';
 import { clear, h } from './dom.ts';
 
 /**
@@ -27,6 +28,14 @@ export interface GridOptions {
   onSelectionChange?: (tiles: TileCoord[]) => void;
   /** Wywoływane po ustawieniu punktu w trybie pin. */
   onPinPlaced?: (pin: TaskPin) => void;
+  /** Klik w przystanek (gdy warstwa „Przystanki” jest włączona): edycja jego parametrów. */
+  onStopClick?: (stop: GridStop) => void;
+}
+
+export interface GridStop {
+  tileFile: string;
+  id: string;
+  p: string[];
 }
 
 const key = (x: number, y: number): string => `${x},${y}`;
@@ -45,7 +54,9 @@ export class MapGrid {
   private pins: GridPin[] = [];
   private splines: MapSplines | null = null;
   private roadColors: string[] = [];
-  private layers = { paths: false };
+  private layers = { paths: false, stops: false };
+  private stops: MapStops | null = null;
+  private tip: HTMLElement;
   private selectedTile: MapTileView | null = null;
   private selectedPin: GridPin | null = null;
   private chosen = new Map<string, TileCoord>();
@@ -66,12 +77,16 @@ export class MapGrid {
     this.infoBox.hidden = true;
     this.emptyMsg = h('div', { class: 'map-empty' });
     this.hint = h('div', { class: 'map-hint' });
-    this.el = h('div', { class: 'map-wrap' }, this.canvas, this.infoBox, this.emptyMsg, this.hint);
+    this.tip = h('div', { class: 'map-tip' });
+    this.tip.hidden = true;
+    this.el = h('div', { class: 'map-wrap' }, this.canvas, this.infoBox, this.emptyMsg, this.hint, this.tip);
     this.ctx = this.canvas.getContext('2d')!;
 
     new ResizeObserver(() => this.draw()).observe(this.canvas);
     this.canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     this.canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
+    this.canvas.addEventListener('pointermove', (e) => this.onHover(e));
+    this.canvas.addEventListener('pointerleave', () => (this.tip.hidden = true));
     this.refresh();
   }
 
@@ -103,9 +118,82 @@ export class MapGrid {
   }
 
   /** Warstwy dodatkowe: ścieżki ruchu ze splinów (rysowane na wierzchu splinów). */
-  setLayers(l: { paths: boolean }): void {
+  setLayers(l: { paths: boolean; stops: boolean }): void {
     this.layers = { ...l };
+    this.tip.hidden = true;
     this.draw();
+  }
+
+  setStops(data: MapStops | null): void {
+    this.stops = data;
+    this.draw();
+  }
+
+  /** Przystanek pod kursorem (promień 9 px); tylko przy włączonej warstwie. */
+  private stopAt(px: number, py: number): { stop: GridStop; name: string; sub: string } | null {
+    if (!this.layers.stops || !this.stops) return null;
+    const w = this.canvas.clientWidth;
+    const hh = this.canvas.clientHeight;
+    const mPx = this.scale / 300;
+    let best: { d: number; stop: GridStop; name: string; sub: string } | null = null;
+    for (const t of this.stops.tiles) {
+      const left = this.sx(t.x - 0.5, w);
+      const top = this.sy(t.y + 0.5, hh);
+      if (left + this.scale < -10 || top + this.scale < -10 || left > w + 10 || top > hh + 10) continue;
+      for (const s of t.s) {
+        const d = Math.hypot(px - (left + s.x * mPx), py - (top + (300 - s.y) * mPx));
+        if (d <= 9 && (!best || d < best.d)) {
+          const p = toParams(s.p);
+          best = { d, stop: { tileFile: t.file, id: s.id, p: s.p }, name: p.name || '(bez nazwy)', sub: p.subName };
+        }
+      }
+    }
+    return best;
+  }
+
+  private onHover(e: PointerEvent): void {
+    if (e.buttons !== 0 || !this.layers.stops) {
+      if (!this.layers.stops) this.tip.hidden = true;
+      return;
+    }
+    const r = this.canvas.getBoundingClientRect();
+    const px = e.clientX - r.left;
+    const py = e.clientY - r.top;
+    const hit = this.stopAt(px, py);
+    this.tip.hidden = !hit;
+    this.canvas.style.cursor = hit ? 'pointer' : '';
+    if (!hit) return;
+    this.tip.textContent = hit.sub ? `${hit.name} (${hit.sub})` : hit.name;
+    this.tip.style.left = `${Math.min(px + 14, r.width - 160)}px`;
+    this.tip.style.top = `${Math.max(4, py - 30)}px`;
+  }
+
+  private drawStops(w: number, hh: number): void {
+    if (!this.layers.stops || !this.stops) return;
+    const ctx = this.ctx;
+    const mPx = this.scale / 300;
+    const rad = Math.max(4, Math.min(8, this.scale / 18));
+    for (const t of this.stops.tiles) {
+      const left = this.sx(t.x - 0.5, w);
+      const top = this.sy(t.y + 0.5, hh);
+      if (left + this.scale < 0 || top + this.scale < 0 || left > w || top > hh) continue;
+      for (const s of t.s) {
+        const x = left + s.x * mPx;
+        const y = top + (300 - s.y) * mPx;
+        ctx.beginPath();
+        ctx.arc(x, y, rad, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffd400';
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#1b1b1b';
+        ctx.stroke();
+        ctx.fillStyle = '#1b1b1b';
+        ctx.font = `bold ${Math.round(rad * 1.2)}px Tahoma, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('P', x, y + 0.5);
+      }
+    }
   }
 
   setBusy(value: boolean): void {
@@ -285,6 +373,11 @@ export class MapGrid {
       this.opts.onPinPlaced?.(this.pending);
       this.draw();
     } else {
+      const stop = this.stopAt(px, py);
+      if (stop) {
+        this.opts.onStopClick?.(stop.stop);
+        return;
+      }
       const pin = this.pinAt(px, py);
       this.selectedPin = pin;
       this.selectedTile = pin ? null : this.tileAt(px, py);
@@ -474,6 +567,7 @@ export class MapGrid {
     }
 
     this.drawSplines(w, hh);
+    this.drawStops(w, hh);
 
     if (this.selectedTile && this.opts.mode === 'info') {
       const left = this.sx(this.selectedTile.x - 0.5, w);

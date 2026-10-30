@@ -591,3 +591,7 @@ select.tt-stop { width: 100%; }
 .tt-block.unknown { background: linear-gradient(#bbb, #888); border-color: #555; }
 .tt-block.sel { outline: 2px solid #ffb400; z-index: 1; }
 select.tt-only { max-width: 170px; }
+
+.map-tip { position: absolute; z-index: 5; pointer-events: none; background: #ffffe1; color: #000; border: 1px solid #000; padding: 2px 6px; font-size: 12px; white-space: nowrap; box-shadow: 2px 2px 3px rgba(0,0,0,.3); }
+.stop-grid { display: grid; grid-template-columns: 220px 1fr; gap: 6px 10px; align-items: center; }
+.stop-grid .hint { grid-column: 2; margin-top: -4px; }

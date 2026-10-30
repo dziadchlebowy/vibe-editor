@@ -147,6 +147,18 @@ export interface MapOverview {
   indexedAt: number;
 }
 
+/** Przystanki (obiekty .sco ze znacznikiem [busstop]) z kafli, do pokazania na mapie. */
+export interface MapStops {
+  version: 1;
+  tiles: {
+    x: number;
+    y: number;
+    /** Plik .map kafla względem folderu mapy. */
+    file: string;
+    s: { id: string; x: number; y: number; rot: number; /** 7 linijek parametrów (patrz shared/busStop.ts) */ p: string[] }[];
+  }[];
+}
+
 /** Jezdnia = spline użyty na mapie. */
 export interface RoadView {
   path: string;

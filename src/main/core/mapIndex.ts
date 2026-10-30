@@ -12,6 +12,7 @@ import {
   splinesPath,
   type TileSplines,
 } from './mapSplines.ts';
+import { buildStopsData, busStopChecker, parseTileObjects, stopsPath, type TileObjects } from './mapStops.ts';
 
 export interface TileRef {
   x: number;
@@ -286,6 +287,7 @@ export async function buildMapIndex(o: BuildOptions): Promise<MapIndex> {
   const tiles: IndexedTile[] = refs.map((r) => ({ ...r, exists: false, assets: [] }));
 
   const tileSplines: TileSplines[] = [];
+  const tileObjects: TileObjects[] = [];
   let done = 0;
   await mapLimit(tiles, 4, async (tile) => {
     const full = safeJoin(mapDir, tile.file);
@@ -306,7 +308,9 @@ export async function buildMapIndex(o: BuildOptions): Promise<MapIndex> {
           ids.add(idx);
         }
         tile.assets = [...ids];
-        tileSplines.push({ x: tile.x, y: tile.y, splines: parseTileSplines(decodeCfg(await fs.promises.readFile(full)).text) });
+        const tileText = decodeCfg(await fs.promises.readFile(full)).text;
+        tileSplines.push({ x: tile.x, y: tile.y, splines: parseTileSplines(tileText) });
+        tileObjects.push({ x: tile.x, y: tile.y, file: tile.file, objects: parseTileObjects(tileText) });
       } catch (e) {
         o.emit('app', `Nie udało się wczytać ${tile.file}: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -375,6 +379,13 @@ export async function buildMapIndex(o: BuildOptions): Promise<MapIndex> {
   });
   objects.sort((x, y) => x.a - y.a);
   o.emit('app', `Obiektów (.sco) wczytanych do drzewa: ${objects.filter((x) => x.k).length}/${objects.length}.`);
+
+  const stopsData = buildStopsData(
+    tileObjects.sort((a, b) => a.y - b.y || a.x - b.x),
+    busStopChecker(dstRoot),
+  );
+  fs.writeFileSync(stopsPath(o.workDir), JSON.stringify(stopsData), 'utf-8');
+  o.emit('app', `Przystanków na mapie: ${stopsData.tiles.reduce((n, t) => n + t.s.length, 0)}.`);
 
   tileSplines.sort((a, b) => a.y - b.y || a.x - b.x);
   const splineData = buildSplinesData(tileSplines, extentFromAssets(dstRoot), pathsFromAssets(dstRoot));
