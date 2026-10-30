@@ -40,7 +40,7 @@ Folder roboczy jest **źródłem prawdy**: jeśli zdalna gałąź zawiera pliki,
 
 ## Indeks mapy i assety
 
-Za każdym razem, gdy podłączany jest nowy folder roboczy (zmiana folderu, mapy lub folderu OMSI) — oraz przyciskiem „Przeskanuj mapę ponownie” w zakładce Mapa:
+Za każdym razem, gdy podłączany jest nowy folder roboczy (zmiana folderu, mapy lub folderu OMSI) — oraz przyciskiem „Przeskanuj mapę ponownie” w zakładce Mapa i trasy:
 
 1. z `global.cfg` czytana jest lista kafli (znaczniki `[map]`: koordynaty x, y + plik `.map`),
 2. każdy plik `.map` jest skanowany strumieniowo; ze znaczników `[spline]`, `[spline_h]`, `[object]`, `[splineAttachement]`, `[attachObj]` zbierana jest ścieżka stojąca **dwie linijki niżej** (unikatowe, osobno dla kafla i dla całej mapy),
@@ -53,13 +53,15 @@ Do promptu dla Claude dopisywana jest krótka notka, że dokładne dane o splina
 
 ## Trasa kursu (.ttr)
 
-Plik `.ttr` to lista wpisów `[track_entry]`: ID splinu lub obiektu · numer ścieżki ruchu w jego `.sli`/`.sco` · indeks kafla (kolejność `[map]` w `global.cfg`) · numer elementu na kaflu · długość · flaga. VibeEditor czyta potrzebne kafle `.map` na żądanie (bez ponownego skanowania mapy), znajduje spline/obiekt po ID, liczy przebieg wskazanej ścieżki (z kopii `.sli`/`.sco` w `_vibe/assets`) i rysuje go na mapie. Przystanki kursu bierze z `[station]` w `.ttp` (ID obiektu przystanku), a gdy go nie ma w `map-stops.json` — dopasowuje po nazwie. Założenia nie potwierdzone w grze: znaczenie 4. i 6. linijki wpisu (pomijane) oraz to, że rysowany jest cały odcinek ścieżki, a nie tylko `długość` z `.ttr`.
+Plik `.ttr` to lista wpisów `[track_entry]`: ID splinu lub obiektu · numer ścieżki ruchu w jego `.sli`/`.sco` · indeks kafla (kolejność `[map]` w `global.cfg`) · numer elementu na kaflu · długość · flaga. VibeEditor czyta potrzebne kafle `.map` na żądanie (bez ponownego skanowania mapy), znajduje spline/obiekt po ID, liczy przebieg wskazanej ścieżki (z kopii `.sli`/`.sco` w `_vibe/assets`) i rysuje go na mapie. Przystanki kursu bierze z `[station]` w `.ttp` (ID obiektu przystanku), a gdy go nie ma w `map-stops.json` — dopasowuje po nazwie. Założenia nie potwierdzone w grze: 4. linijka wpisu to pozycja elementu w pliku kafla (wczytane wpisy zachowują swoją wartość; pasek informacji zlicza rozbieżności), 6. to flaga (zawsze 0 w próbce), oraz to, że rysowany jest cały odcinek ścieżki, a nie tylko `długość` z `.ttr`.
 
-## Zakładki
+## Zakładki (w kolejności)
 
 - **Zadania** — lista zadań (Aktywne / Odrzucone / Archiwum), „+ Dodaj”, „▶️ Uruchom”, „⏹️ Zatrzymaj”.
-- **Mapa** — przesuwalna i zoomowalna siatka kafli, start wycentrowany na środku mapy. Klik w kafel pokazuje w prawym górnym rogu koordynaty, plik `.map`, liczbę assetów i brakujące w OMSI. „📍 Dodaj pinezkę”: w tym trybie klik w punkt mapy otwiera nowe zadanie z tą pinezką; pinezki zadań (aktywnych i odrzuconych) są rysowane na mapie, klik w pinezkę pokazuje tytuł zadania.
-  Przybliżenie do ok. 20 px na metr. Pasek „Trasa kursu” rysuje trasę z pliku `.ttr` o tej samej nazwie co `.ttp` (szukany najpierw w tym samym folderze, potem w całym folderze mapy; wielkość liter i `-`/`_` nie mają znaczenia) wraz z przystankami kursu; to samo robi przycisk „🗺️ Pokaż trasę na mapie” w zakładce Linie (przy kursie z plikiem `.ttr`).
+- **Mapa i trasy** — przesuwalna i zoomowalna siatka kafli, start wycentrowany na środku mapy. Klik w kafel pokazuje w prawym górnym rogu koordynaty, plik `.map`, liczbę assetów i brakujące w OMSI. „📍 Dodaj pinezkę”: w tym trybie klik w punkt mapy otwiera nowe zadanie z tą pinezką; pinezki zadań (aktywnych i odrzuconych) są rysowane na mapie, klik w pinezkę pokazuje tytuł zadania.
+  Przybliżenie do ok. 20 px na metr. Pasek „Trasa kursu” rysuje trasę z pliku `.ttr` o tej samej nazwie co `.ttp` (szukany najpierw w tym samym folderze, potem w całym folderze mapy; wielkość liter i `-`/`_` nie mają znaczenia) wraz z przystankami kursu; to samo robi przycisk „🗺️ Pokaż trasę na mapie” w zakładce Rozkłady (przy kursie z plikiem `.ttr`).
+  **Edycja trasy:** wybierz kurs w pasku „Trasa kursu” i kliknij „✏️ Edytuj trasę” (kurs bez `.ttr` też — plik powstanie przy zapisie). Klik w ścieżkę ruchu (jezdnię albo ścieżkę obiektu, np. skrzyżowania) dodaje ją jako odcinek po zaznaczonym (albo na końcu); klik w odcinek trasy zaznacza go; panel po prawej ma listę odcinków z ▲/▼ (kolejność), 🗑️ (usuń), ↶/↷ (cofnij/ponów) i „💾 Zapisz .ttr”. Skróty: Delete, Ctrl+Z, Ctrl+Y, Ctrl+S, Esc. Pierwszy zapis robi kopię `.ttr.bak`. Nowy wpis dostaje: ID splinu/obiektu, numer klikniętej ścieżki, indeks kafla, pozycję elementu w pliku kafla (to ostatnie to przypuszczenie — pasek informacji ostrzega, gdy w istniejących wpisach się nie zgadza), długość ścieżki i flagę 0.
+- **Rozkłady** — linie (`.ttl`) i kursy (`.ttp`) z folderu mapy: lista po lewej (zachowuje przewinięcie po kliknięciu pozycji), edytor po prawej.
 - **Jezdnie** — lista wszystkich wczytanych splinów (`[spline]`, `[spline_h]`) po ścieżce, z filtrem. Dwuklik tworzy nowe zadanie z podpiętą jezdnią.
 - **Obiekty** — drzewo obiektów z plików `.sco`: `[groups]` (liczba, a pod nią nazwy „folderów” od korzenia) i `[friendlyname]` (np. `📂 Aachen › 📂 Gruen › 🏠 Busch`). Dwuklik tworzy nowe zadanie z podpiętym obiektem.
 - **Konsola** — output Gita i Claude (filtr: wszystko / tylko Git / tylko Claude).

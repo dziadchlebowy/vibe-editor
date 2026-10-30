@@ -6,6 +6,7 @@ import type {
   MapInfo,
   MapOverview,
   MapSplines,
+  RouteSegment,
   RunState,
   Settings,
   TaskAttachment,
@@ -13,6 +14,7 @@ import type {
   TaskPin,
   TaskView,
   TileCoord,
+  TripRoute,
 } from '../shared/types.ts';
 
 import { ObjectsView, RoadsView } from './assetViews.ts';
@@ -98,10 +100,10 @@ let routeInfo: HTMLElement;
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'tasks', label: 'Zadania' },
-  { id: 'map', label: 'Mapa' },
+  { id: 'map', label: 'Mapa i trasy' },
+  { id: 'lines', label: 'Rozkłady' },
   { id: 'roads', label: 'Jezdnie' },
   { id: 'objects', label: 'Obiekty' },
-  { id: 'lines', label: 'Linie' },
   { id: 'console', label: 'Konsola' },
 ];
 
@@ -578,7 +580,7 @@ async function refreshTasks(): Promise<void> {
   updateStatusBar();
 }
 
-// --- zakładka Mapa ---------------------------------------------------------
+// --- zakładka Mapa i trasy ---------------------------------------------------------
 
 interface PickerOptions {
   title: string;
@@ -757,41 +759,225 @@ function openStopDialog(stop: GridStop): void {
   warn.textContent = hasPolishChars(p.name) ? 'Nazwa zawiera polskie znaki — zalecane ich unikanie.' : '';
 }
 
-/** Lista kursów, które mają obok plik .ttr (trasę); zachowuje bieżący wybór. */
+// --- trasy kursów: podgląd i edycja ---------------------------------------
+
+let routeBase: TripRoute | null = null; // wczytana trasa: przystanki i metadane (odcinki trzyma routeSegs)
+let routeSegs: RouteSegment[] = []; // robocza lista odcinków (kolejność jazdy)
+let routeSel: number | null = null;
+let routeDirty = false;
+let routeEditing = false;
+let routeUndo: RouteSegment[][] = [];
+let routeRedo: RouteSegment[][] = [];
+let routePanel: HTMLElement;
+let editBtn: HTMLButtonElement;
+
+/** Lista kursów do wyboru trasy; kursy bez pliku .ttr też, bo trasę można dla nich utworzyć. Zachowuje wybór. */
 async function fillRouteSelect(): Promise<void> {
   if (!routeSelect) return;
   const keep = routeSelect.value;
-  const trips = (await ve.loadTimetable()).trips.filter((t) => t.trackFile);
+  const trips = (await ve.loadTimetable()).trips;
   routeSelect.replaceChildren(
-    h('option', { value: '' }, trips.length ? '— bez trasy —' : '— nie znaleziono plików .ttr o nazwach kursów —'),
-    ...trips.map((t) => h('option', { value: t.file }, t.title ? `${t.name} → ${t.title}` : t.name)),
+    h('option', { value: '' }, trips.length ? '— bez trasy —' : '— brak kursów (.ttp) w folderze mapy —'),
+    ...trips.map((t) => h('option', { value: t.file }, `${t.title ? `${t.name} → ${t.title}` : t.name}${t.trackFile ? '' : ' — brak .ttr'}`)),
   );
   if (trips.some((t) => t.file === keep)) routeSelect.value = keep;
 }
 
+const routeMeters = (): number => routeSegs.reduce((n, g) => n + g.length, 0);
+
+function routeSummary(): string {
+  const r = routeBase;
+  if (!r) return '';
+  const parts = [`Trasa ${r.trip}: odcinków ${routeSegs.length}`, `${Math.round(routeMeters())} m`, `przystanków na mapie ${r.stops.length}`];
+  if (r.noFile) parts.push('brak pliku .ttr (powstanie przy zapisie)');
+  const bad = routeSegs.filter((g) => g.line.length === 0).length;
+  if (bad) parts.push(`nieznalezionych odcinków: ${bad} (przeskanuj mapę lub sprawdź .ttr)`);
+  if (r.indexMismatch) parts.push(`numer elementu na kaflu różni się w ${r.indexMismatch} wpisach`);
+  if (r.missingStops.length) parts.push(`brak przystanków: ${r.missingStops.join(', ')}`);
+  if (routeDirty) parts.push('NIEZAPISANE ZMIANY');
+  return parts.join(' · ');
+}
+
+/** Przerysowuje trasę na mapie, panel edycji i pasek informacji z bieżącego stanu roboczego. */
+function applyRoute(): void {
+  mapGrid.setRoute(routeBase ? { ...routeBase, segments: routeSegs } : null);
+  mapGrid.setRouteSelected(routeSel);
+  routeInfo.textContent = routeSummary();
+  routeInfo.className = routeDirty ? 'status warn' : 'status';
+  editBtn.disabled = !routeBase;
+  renderRoutePanel();
+}
+
+function routeChange(next: RouteSegment[], sel: number | null): void {
+  routeUndo.push(routeSegs);
+  routeRedo = [];
+  routeSegs = next;
+  routeSel = sel;
+  routeDirty = true;
+  applyRoute();
+}
+
+function routeUndoRedo(from: RouteSegment[][], to: RouteSegment[][]): void {
+  const prev = from.pop();
+  if (!prev) return;
+  to.push(routeSegs);
+  routeSegs = prev;
+  routeSel = routeSel !== null && routeSel < routeSegs.length ? routeSel : null;
+  routeDirty = true;
+  applyRoute();
+}
+
+function selectRouteSeg(i: number | null, focus = true): void {
+  routeSel = i;
+  applyRoute();
+  if (focus && i !== null) mapGrid.focusSegment(i);
+}
+
+function routeInsert(seg: RouteSegment): void {
+  const pos = routeSel === null ? routeSegs.length : routeSel + 1;
+  routeChange([...routeSegs.slice(0, pos), seg, ...routeSegs.slice(pos)], pos);
+}
+
+function routeDelete(): void {
+  if (routeSel === null) return;
+  const i = routeSel;
+  routeChange(routeSegs.filter((_, k) => k !== i), routeSegs.length - 1 === 0 ? null : Math.min(i, routeSegs.length - 2));
+}
+
+function routeMove(d: -1 | 1): void {
+  if (routeSel === null) return;
+  const j = routeSel + d;
+  if (j < 0 || j >= routeSegs.length) return;
+  const next = [...routeSegs];
+  [next[routeSel], next[j]] = [next[j], next[routeSel]];
+  routeChange(next, j);
+}
+
+async function routeSave(): Promise<void> {
+  if (!routeBase) return;
+  const res = await ve.saveTripRoute(routeBase.tripFile, routeSegs);
+  if (!res.ok) {
+    alert(res.error ?? 'Nie udało się zapisać trasy.');
+    return;
+  }
+  routeDirty = false;
+  const keepSel = routeSel;
+  await showTripRoute(routeBase.tripFile, false, true);
+  routeSel = keepSel !== null && keepSel < routeSegs.length ? keepSel : null;
+  applyRoute();
+  void fillRouteSelect();
+}
+
+/** Klik w trybie edycji: istniejący odcinek zaznacza, puste miejsce dodaje najbliższą ścieżkę ruchu po zaznaczonym. */
+async function onRouteMapClick(c: { segment: number | null; x: number; y: number; maxDistM: number }): Promise<void> {
+  if (c.segment !== null) {
+    selectRouteSeg(c.segment, false);
+    return;
+  }
+  const seg = await ve.pickTrack(c.x, c.y, c.maxDistM);
+  if (!seg) {
+    routeInfo.textContent = 'W tym miejscu nie ma ścieżki ruchu — przybliż mapę i kliknij bliżej drogi (włącz warstwę „Spliny”).';
+    routeInfo.className = 'status warn';
+    return;
+  }
+  const same = routeSegs.findIndex((g) => g.id === seg.id && g.pathIndex === seg.pathIndex);
+  if (same >= 0) selectRouteSeg(same, false);
+  else routeInsert(seg);
+}
+
+function routeButton(label: string, title: string, fn: () => void, disabled = false, cls = 'btn'): HTMLElement {
+  const b = h('button', { class: cls, title, onClick: fn }, label);
+  b.disabled = disabled;
+  return b;
+}
+
+function renderRoutePanel(): void {
+  if (!routePanel) return;
+  const scroll = routePanel.querySelector('.rt-list')?.scrollTop ?? 0;
+  clear(routePanel);
+  routePanel.hidden = !routeEditing || !routeBase;
+  if (routePanel.hidden || !routeBase) return;
+  const n = routeSegs.length;
+  const list = h('div', { class: 'rt-list' });
+  routeSegs.forEach((g, k) => {
+    list.append(
+      h(
+        'button',
+        { class: `rt-row${k === routeSel ? ' active' : ''}${g.line.length === 0 ? ' bad' : ''}`, title: g.line.length === 0 ? 'Nie znaleziono na mapie' : `kafel ${g.tile}, element ${g.index}`, onClick: () => selectRouteSeg(k) },
+        h('span', { class: 'rt-n' }, `${k + 1}.`),
+        h('span', { class: 'rt-id' }, `${g.line.length === 0 ? '⚠ ' : ''}${g.id}`),
+        h('span', { class: 'rt-meta' }, `ścieżka ${g.pathIndex} · ${g.length.toFixed(1)} m`),
+      ),
+    );
+  });
+  if (n === 0) list.append(h('div', { class: 'empty' }, 'Trasa jest pusta. Kliknij na mapie ścieżkę ruchu (jezdnię), aby dodać pierwszy odcinek.'));
+  routePanel.append(
+    h('div', { class: 'rt-title' }, `✏️ Edycja trasy: ${routeBase.trip}`),
+    h(
+      'div',
+      { class: 'rt-buttons' },
+      routeButton('↶', 'Cofnij (Ctrl+Z)', () => routeUndoRedo(routeUndo, routeRedo), routeUndo.length === 0),
+      routeButton('↷', 'Ponów (Ctrl+Y)', () => routeUndoRedo(routeRedo, routeUndo), routeRedo.length === 0),
+      routeButton('▲', 'Przesuń zaznaczony odcinek wcześniej', () => routeMove(-1), routeSel === null || routeSel === 0),
+      routeButton('▼', 'Przesuń zaznaczony odcinek później', () => routeMove(1), routeSel === null || routeSel >= n - 1),
+      routeButton('🗑️', 'Usuń zaznaczony odcinek (Delete)', routeDelete, routeSel === null),
+    ),
+    list,
+    h('div', { class: 'rt-foot' }, `${n} odc. · ${Math.round(routeMeters())} m`),
+    h(
+      'div',
+      { class: 'rt-buttons' },
+      routeButton('💾 Zapisz .ttr', 'Zapisz trasę do pliku .ttr kursu (Ctrl+S); pierwszy zapis robi kopię .ttr.bak', () => void routeSave(), !routeDirty, 'btn primary'),
+      routeButton('Zakończ edycję', 'Wyłącz tryb edycji (niezapisane zmiany zostają do zapisu)', () => setRouteEditing(false)),
+    ),
+  );
+  const keep = routePanel.querySelector('.rt-list');
+  if (keep) keep.scrollTop = scroll;
+  routePanel.querySelector('.rt-row.active')?.scrollIntoView({ block: 'nearest' });
+}
+
+function setRouteEditing(on: boolean): void {
+  routeEditing = on && !!routeBase;
+  editBtn.textContent = routeEditing ? '✏️ Edycja trasy: włączona' : '✏️ Edytuj trasę';
+  editBtn.classList.toggle('active', routeEditing);
+  mapGrid.setRouteEditing(routeEditing);
+  if (!routeEditing) routeSel = null;
+  applyRoute();
+}
+
 /** Pokazuje na mapie trasę kursu (plik kursu względem folderu mapy); pusty ciąg ją ukrywa. */
-async function showTripRoute(tripFile: string, fit = true): Promise<void> {
+async function showTripRoute(tripFile: string, fit = true, force = false): Promise<void> {
+  if (!force && routeDirty && routeBase?.tripFile !== tripFile && !window.confirm('Masz niezapisane zmiany trasy. Odrzucić je?')) {
+    routeSelect.value = routeBase?.tripFile ?? '';
+    return;
+  }
+  routeDirty = false;
+  routeUndo = [];
+  routeRedo = [];
+  routeSel = null;
   if (!tripFile) {
-    mapGrid.setRoute(null);
+    routeBase = null;
+    routeSegs = [];
     routeInfo.textContent = '';
+    setRouteEditing(false);
     return;
   }
   routeInfo.textContent = 'Wczytuję trasę…';
   const route = await ve.getTripRoute(tripFile);
   if (route.error) {
-    mapGrid.setRoute(null);
+    routeBase = null;
+    routeSegs = [];
+    setRouteEditing(false);
     routeInfo.textContent = route.error;
     return;
   }
-  mapGrid.setRoute(route);
-  const parts = [`Trasa ${route.trip}: odcinków ${route.lines.length}/${route.entries}`, `przystanków na mapie ${route.stops.length}`];
-  if (route.unresolved) parts.push(`nieznalezionych odcinków: ${route.unresolved} (przeskanuj mapę lub sprawdź .ttr)`);
-  if (route.missingStops.length) parts.push(`brak przystanków: ${route.missingStops.join(', ')}`);
-  routeInfo.textContent = parts.join(' · ');
+  routeBase = route;
+  routeSegs = route.segments;
+  applyRoute();
   if (fit) requestAnimationFrame(() => mapGrid.fitRoute());
 }
 
-/** Z zakładki Linie: przełącza na mapę i pokazuje trasę kursu. */
+/** Z zakładki Rozkłady: przełącza na mapę i pokazuje trasę kursu. */
 async function openTripRouteOnMap(tripFile: string): Promise<void> {
   activeTab = 'map';
   renderTabs();
@@ -807,6 +993,7 @@ function mountMapTab(): void {
   mapGrid = new MapGrid({
     mode: 'info',
     onStopClick: (s) => openStopDialog(s),
+    onRouteClick: (c) => void onRouteMapClick(c),
     onPinPlaced: (p) => {
       // punkt wskazany: wracamy do zwykłego trybu i otwieramy nowe zadanie z tą pinezką
       setPinMode(false);
@@ -833,6 +1020,23 @@ function mountMapTab(): void {
   routeSelect = h('select', { title: 'Pokaż na mapie trasę kursu (plik .ttr obok kursu) wraz z przystankami' });
   routeSelect.addEventListener('change', () => void showTripRoute(routeSelect.value));
   routeInfo = h('span', { class: 'status' });
+  editBtn = h('button', { class: 'btn', title: 'Włącz edycję trasy wybranego kursu: klikaj ścieżki ruchu na mapie, aby je dodawać', onClick: () => setRouteEditing(!routeEditing) }, '✏️ Edytuj trasę');
+  editBtn.disabled = true;
+  routePanel = h('div', { class: 'rt-panel' });
+  routePanel.hidden = true;
+  mapGrid.el.append(routePanel);
+  document.addEventListener('keydown', (e) => {
+    if (!routeEditing || activeTab !== 'map') return;
+    const t = e.target as HTMLElement;
+    if (['INPUT', 'SELECT', 'TEXTAREA'].includes(t.tagName)) return;
+    if (e.key === 'Delete') routeDelete();
+    else if (e.ctrlKey && e.key.toLowerCase() === 'z') routeUndoRedo(routeUndo, routeRedo);
+    else if (e.ctrlKey && e.key.toLowerCase() === 'y') routeUndoRedo(routeRedo, routeUndo);
+    else if (e.ctrlKey && e.key.toLowerCase() === 's' && routeDirty) void routeSave();
+    else if (e.key === 'Escape') setRouteEditing(false);
+    else return;
+    e.preventDefault();
+  });
   void fillRouteSelect();
   root.append(
     h(
@@ -847,7 +1051,7 @@ function mountMapTab(): void {
       h('div', { class: 'spacer' }),
       mapSummary,
     ),
-    h('div', { class: 'toolbar' }, h('span', {}, 'Trasa kursu:'), routeSelect, routeInfo),
+    h('div', { class: 'toolbar' }, h('span', {}, 'Trasa kursu:'), routeSelect, editBtn, routeInfo),
     mapGrid.el,
   );
   updateMapToolbar();

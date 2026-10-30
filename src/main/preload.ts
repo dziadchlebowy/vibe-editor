@@ -38,6 +38,8 @@ const api: VeApi = {
   saveLine: (line) => ipcRenderer.invoke('tt:saveLine', line),
   saveTrip: (trip) => ipcRenderer.invoke('tt:saveTrip', trip),
   getTripRoute: (tripFile) => ipcRenderer.invoke('tt:route', tripFile),
+  pickTrack: (x, y, maxDistM) => ipcRenderer.invoke('tt:pick', x, y, maxDistM),
+  saveTripRoute: (tripFile, segments) => ipcRenderer.invoke('tt:saveRoute', tripFile, segments),
 
   windowControl: (action) => ipcRenderer.invoke('win:control', action),
   isWindowMaximized: () => ipcRenderer.invoke('win:isMaximized'),

@@ -74,7 +74,7 @@ export class RoadsView {
     const shown = all.slice(0, MAX_LIST_ROWS);
     clear(this.list);
     if (this.roads.length === 0) {
-      this.list.append(h('div', { class: 'empty' }, 'Brak wczytanych jezdni. Przeskanuj mapę w zakładce Mapa.'));
+      this.list.append(h('div', { class: 'empty' }, 'Brak wczytanych jezdni. Przeskanuj mapę w zakładce Mapa i trasy.'));
     } else if (all.length === 0) {
       this.list.append(h('div', { class: 'empty' }, 'Brak wyników.'));
     }
@@ -132,7 +132,7 @@ export class ObjectsView {
     const list = q ? this.objects.filter((o) => matches(o.name, q) || matches(o.path, q)) : this.objects;
     clear(this.tree);
     if (this.objects.length === 0) {
-      this.tree.append(h('div', { class: 'empty' }, 'Brak wczytanych obiektów. Przeskanuj mapę w zakładce Mapa.'));
+      this.tree.append(h('div', { class: 'empty' }, 'Brak wczytanych obiektów. Przeskanuj mapę w zakładce Mapa i trasy.'));
     } else if (list.length === 0) {
       this.tree.append(h('div', { class: 'empty' }, 'Brak wyników.'));
     }

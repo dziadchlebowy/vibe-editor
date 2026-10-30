@@ -88,6 +88,8 @@ export class TimetableView {
   // --- lista ---------------------------------------------------------------
 
   private renderSide(): void {
+    // lista jest budowana od nowa przy każdym kliknięciu — zachowujemy położenie przewinięcia
+    const scroll = this.side.scrollTop;
     clear(this.side);
     const q = this.filter.value.trim().toLowerCase();
     const ok = (n: string): boolean => !q || n.toLowerCase().includes(q);
@@ -117,6 +119,7 @@ export class TimetableView {
         .filter((t) => ok(t.name) || ok(t.title))
         .map((t) => ({ kind: 'trip' as const, file: t.file, name: t.name, info: `${t.title} · ${t.stations.length} przyst.` })),
     );
+    this.side.scrollTop = scroll;
   }
 
   // --- edytor ----------------------------------------------------------------

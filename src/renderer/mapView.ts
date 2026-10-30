@@ -30,6 +30,11 @@ export interface GridOptions {
   onPinPlaced?: (pin: TaskPin) => void;
   /** Klik w przystanek (gdy warstwa „Przystanki” jest włączona): edycja jego parametrów. */
   onStopClick?: (stop: GridStop) => void;
+  /**
+   * Klik w trybie edycji trasy: segment = indeks klikniętego odcinka trasy (null, gdy kliknięto puste miejsce),
+   * x/y = punkt w jednostkach kafli, maxDistM = promień „trafienia” w metrach przy bieżącym zbliżeniu.
+   */
+  onRouteClick?: (c: { segment: number | null; x: number; y: number; maxDistM: number }) => void;
 }
 
 export interface GridStop {
@@ -59,6 +64,8 @@ export class MapGrid {
   private objPaths: MapObjPaths | null = null;
   private stops: MapStops | null = null;
   private route: TripRoute | null = null;
+  private routeEditing = false;
+  private routeSelected: number | null = null;
   private tip: HTMLElement;
   private selectedTile: MapTileView | null = null;
   private selectedPin: GridPin | null = null;
@@ -158,7 +165,7 @@ export class MapGrid {
     if (!r || w === 0 || hh === 0) return;
     const xs: number[] = [];
     const ys: number[] = [];
-    for (const l of r.lines) for (let i = 0; i < l.length; i += 2) (xs.push(l[i]), ys.push(l[i + 1]));
+    for (const g of r.segments) for (let i = 0; i < g.line.length; i += 2) (xs.push(g.line[i]), ys.push(g.line[i + 1]));
     for (const s of r.stops) (xs.push(s.x), ys.push(s.y));
     if (xs.length === 0) return;
     const [minX, maxX, minY, maxY] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
@@ -168,6 +175,56 @@ export class MapGrid {
     this.scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, fit));
     this.needFit = false;
     this.draw();
+  }
+
+  /** Tryb edycji trasy: klik w odcinek trasy lub w puste miejsce idzie do onRouteClick zamiast zwykłych informacji o kaflu. */
+  setRouteEditing(on: boolean): void {
+    this.routeEditing = on;
+    if (!on) this.routeSelected = null;
+    this.refresh();
+  }
+
+  /** Zaznaczony odcinek trasy (indeks w route.segments) — rysowany wyróżnionym kolorem z oznaczonym początkiem i końcem. */
+  setRouteSelected(i: number | null): void {
+    this.routeSelected = i;
+    this.draw();
+  }
+
+  /** Przesuwa widok tak, by zaznaczony odcinek był w kadrze (bez zmiany zbliżenia, jeśli już jest widoczny). */
+  focusSegment(i: number): void {
+    const g = this.route?.segments[i];
+    if (!g || g.line.length < 2) return;
+    const mid = Math.floor(g.line.length / 4) * 2;
+    const w = this.canvas.clientWidth;
+    const hh = this.canvas.clientHeight;
+    const px = this.sx(g.line[mid], w);
+    const py = this.sy(g.line[mid + 1], hh);
+    if (px > 40 && py > 40 && px < w - 340 && py < hh - 40) return;
+    this.cx = g.line[mid];
+    this.cy = g.line[mid + 1];
+    this.draw();
+  }
+
+  /** Indeks odcinka trasy najbliżej punktu ekranu (maks. 8 px) albo null. */
+  private segmentAt(px: number, py: number): number | null {
+    const w = this.canvas.clientWidth;
+    const hh = this.canvas.clientHeight;
+    let best: number | null = null;
+    let bestD = 8;
+    this.route?.segments.forEach((g, k) => {
+      const l = g.line;
+      for (let i = 0; i + 3 < l.length; i += 2) {
+        const ax = this.sx(l[i], w);
+        const ay = this.sy(l[i + 1], hh);
+        const dx = this.sx(l[i + 2], w) - ax;
+        const dy = this.sy(l[i + 3], hh) - ay;
+        const l2 = dx * dx + dy * dy;
+        const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2));
+        const d = Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+        if (d < bestD) (bestD = d, (best = k));
+      }
+    });
+    return best;
   }
 
   /** Przystanek pod kursorem (promień 9 px); tylko przy włączonej warstwie. */
@@ -257,25 +314,69 @@ export class MapGrid {
     }
   }
 
-  /** Trasa kursu: biały kontur + jaskrawa linia; przystanki jako numerowane kółka z nazwą przy większym zbliżeniu. */
+  /** Trasa kursu: biały kontur + jaskrawa linia (zaznaczony odcinek na niebiesko); przystanki jako numerowane kółka z nazwą przy większym zbliżeniu. */
   private drawRoute(w: number, hh: number): void {
     const r = this.route;
     if (!r) return;
     const ctx = this.ctx;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+    const trace = (l: number[]): void => {
+      ctx.beginPath();
+      for (let i = 0; i < l.length; i += 2) {
+        const px = this.sx(l[i], w);
+        const py = this.sy(l[i + 1], hh);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    };
     for (const pass of [0, 1]) {
-      ctx.strokeStyle = pass === 0 ? '#ffffff' : '#e8590c';
-      ctx.lineWidth = pass === 0 ? 6 : 3.4;
-      for (const l of r.lines) {
+      r.segments.forEach((g, k) => {
+        const sel = k === this.routeSelected;
+        ctx.strokeStyle = pass === 0 ? '#ffffff' : sel ? '#0b5cff' : '#e8590c';
+        ctx.lineWidth = pass === 0 ? (sel ? 9 : 6) : sel ? 5.5 : 3.4;
+        trace(g.line);
+      });
+    }
+    if (this.routeEditing) {
+      // strzałki kierunku jazdy w środku każdego odcinka; początek i koniec zaznaczonego odcinka
+      r.segments.forEach((g, k) => {
+        const l = g.line;
+        if (l.length < 4) return;
+        const m = Math.floor(l.length / 4) * 2 - 2;
+        const ax = this.sx(l[Math.max(0, m)], w);
+        const ay = this.sy(l[Math.max(0, m) + 1], hh);
+        const bx = this.sx(l[Math.max(0, m) + 2], w);
+        const by = this.sy(l[Math.max(0, m) + 3], hh);
+        const ang = Math.atan2(by - ay, bx - ax);
+        const mx = (ax + bx) / 2;
+        const my = (ay + by) / 2;
+        ctx.save();
+        ctx.translate(mx, my);
+        ctx.rotate(ang);
         ctx.beginPath();
-        for (let i = 0; i < l.length; i += 2) {
-          const px = this.sx(l[i], w);
-          const py = this.sy(l[i + 1], hh);
-          if (i === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
-        }
-        ctx.stroke();
+        ctx.moveTo(6, 0);
+        ctx.lineTo(-5, -5);
+        ctx.lineTo(-5, 5);
+        ctx.closePath();
+        ctx.fillStyle = k === this.routeSelected ? '#ffffff' : '#1b1b1b';
+        ctx.fill();
+        ctx.restore();
+      });
+      const sg = this.routeSelected !== null ? r.segments[this.routeSelected] : null;
+      if (sg && sg.line.length >= 2) {
+        const dot = (i: number, color: string): void => {
+          ctx.beginPath();
+          ctx.arc(this.sx(sg.line[i], w), this.sy(sg.line[i + 1], hh), 6, 0, Math.PI * 2);
+          ctx.fillStyle = color;
+          ctx.fill();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#ffffff';
+          ctx.stroke();
+        };
+        dot(0, '#2b9a3a');
+        dot(sg.line.length - 2, '#d6291f');
       }
     }
     const rad = 9;
@@ -496,6 +597,11 @@ export class MapGrid {
   }
 
   private click(px: number, py: number): void {
+    if (this.routeEditing) {
+      const w = this.worldAt(px, py);
+      this.opts.onRouteClick?.({ segment: this.segmentAt(px, py), x: w.x, y: w.y, maxDistM: (10 * 300) / this.scale });
+      return;
+    }
     const mode = this.opts.mode;
     if (mode === 'select') {
       const t = this.tileAt(px, py);
@@ -533,9 +639,10 @@ export class MapGrid {
     this.emptyMsg.textContent = this.busy
       ? 'Trwa wczytywanie kafli…'
       : 'Brak danych mapy. Skonfiguruj folder roboczy w Ustawieniach albo przeskanuj mapę.';
-    this.canvas.style.cursor = this.opts.mode === 'info' ? '' : this.opts.mode === 'pin' ? 'crosshair' : 'pointer';
-    this.hint.textContent =
-      this.opts.mode === 'select'
+    this.canvas.style.cursor = this.routeEditing || this.opts.mode === 'pin' ? 'crosshair' : this.opts.mode === 'info' ? '' : 'pointer';
+    this.hint.textContent = this.routeEditing
+      ? 'Edycja trasy: klik w ścieżkę ruchu — dodaj odcinek po zaznaczonym · klik w odcinek trasy — zaznacz · Delete — usuń · przeciągnij — przesuwanie · kółko — zoom'
+      : this.opts.mode === 'select'
         ? 'Klik — zaznacz/odznacz kafel · przeciągnij — przesuwanie · kółko — zoom'
         : this.opts.mode === 'pin'
           ? 'Kliknij punkt na mapie, aby ustawić pinezkę · przeciągnij — przesuwanie · kółko — zoom'

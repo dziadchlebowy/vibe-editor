@@ -15,6 +15,7 @@ import type {
   TaskView,
   TimetableData,
   TripFile,
+  RouteSegment,
   TripRoute,
 } from './types.ts';
 
@@ -59,6 +60,10 @@ export interface VeApi {
   saveTrip(trip: TripFile): Promise<OkResult>;
   /** Trasa kursu z pliku .ttr leżącego obok .ttp (plik kursu względem folderu mapy). */
   getTripRoute(tripFile: string): Promise<TripRoute>;
+  /** Najbliższa ścieżka ruchu (spline lub obiekt) wokół punktu (jednostki kafli), maks. maxDistM metrów; null, gdy żadnej nie ma. */
+  pickTrack(x: number, y: number, maxDistM: number): Promise<RouteSegment | null>;
+  /** Zapisuje trasę kursu do pliku .ttr (tworzy go, jeśli go nie ma; pierwszy zapis robi kopię .ttr.bak). */
+  saveTripRoute(tripFile: string, segments: RouteSegment[]): Promise<OkResult>;
 
   /** Okno bez natywnej ramki (motyw XP): własne przyciski minimalizuj / maksymalizuj / zamknij. */
   windowControl(action: 'minimize' | 'maximize' | 'close'): Promise<void>;

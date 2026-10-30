@@ -384,6 +384,20 @@ input[type="checkbox"]:disabled, input[type="radio"]:disabled { opacity: .5; }
 .map-info-row .v.bad { color: var(--danger); font-weight: bold; }
 .map-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; text-shadow: 1px 1px #0b2a73; text-align: center; padding: 24px; pointer-events: none; }
 .map-empty[hidden] { display: none; }
+.rt-panel { position: absolute; top: 8px; right: 8px; bottom: 30px; width: 290px; display: flex; flex-direction: column; gap: 6px; padding: 6px; background: var(--bg); border: 2px solid; border-color: #fff #716f64 #716f64 #fff; box-shadow: 2px 2px 6px rgba(0,0,0,.35); }
+.rt-panel[hidden] { display: none; }
+.rt-title { font-weight: bold; }
+.rt-buttons { display: flex; gap: 4px; flex-wrap: wrap; }
+.rt-list { flex: 1; min-height: 0; overflow: auto; background: #fff; border: 1px solid var(--xp-field); }
+.rt-row { display: grid; grid-template-columns: 34px 1fr; width: 100%; padding: 2px 6px; background: #fff; border: 0; border-bottom: 1px solid #eee; text-align: left; cursor: default; }
+.rt-row:hover { background: #eef3fb; }
+.rt-row.active { background: var(--accent); color: #fff; }
+.rt-row.bad .rt-id { color: #b3261e; }
+.rt-row.active.bad .rt-id { color: #ffd2cf; }
+.rt-n { grid-row: span 2; align-self: center; opacity: .7; }
+.rt-id { font-weight: bold; }
+.rt-meta { font-size: 11px; opacity: .75; }
+.rt-foot { color: var(--muted); }
 .map-hint { position: absolute; left: 8px; bottom: 6px; color: #fff; text-shadow: 1px 1px #0b2a73; font-size: 12px; pointer-events: none; }
 
 /* --- Jezdnie / Obiekty, pinezki, Odrzucone ------------------------------------------ */
@@ -540,7 +554,7 @@ main { margin-bottom: 4px; }
 .sb-cell.busy { color: #0046d5; font-weight: bold; }
 .sb-cell.warn { color: var(--danger); font-weight: bold; }
 
-/* --- zakładka Linie ----------------------------------------------------------- */
+/* --- zakładka Rozkłady ----------------------------------------------------------- */
 .tt-layout { display: flex; gap: 8px; flex: 1; min-height: 0; }
 .tt-left { display: flex; flex-direction: column; gap: 6px; width: 260px; flex-shrink: 0; min-height: 0; }
 .tt-side { flex: 1; overflow: auto; background: #fff; border: 1px solid var(--xp-field); }

@@ -279,20 +279,43 @@ export interface TimetableData {
   trips: TripFile[];
 }
 
+/** Jeden wpis [track_entry] z pliku .ttr wraz z przebiegiem do narysowania. */
+export interface RouteSegment {
+  /** ID splinu albo obiektu. */
+  id: string;
+  /** Numer ścieżki ruchu ([path]) w pliku .sli albo .sco, od 0. */
+  pathIndex: number;
+  /** Indeks kafla w kolejności [map] z global.cfg. */
+  tile: number;
+  /** Numer elementu na kaflu (4. linijka wpisu). */
+  index: number;
+  /** Długość ścieżki w metrach. */
+  length: number;
+  /** Ostatnia linijka wpisu (w próbce zawsze 0). */
+  flag: number;
+  /** Przebieg: płaska tablica [x0, y0, x1, y1, …] w jednostkach kafli; pusta, gdy nie udało się go ułożyć. */
+  line: number[];
+}
+
 /**
  * Trasa kursu z pliku .ttr, gotowa do narysowania. Współrzędne w jednostkach kafli
  * (środek kafla (x, y) to dokładnie (x, y), oś Y rośnie na północ) — jak pinezki.
  */
 export interface TripRoute {
   trip: string;
-  /** Polilinie odcinków trasy: płaskie tablice [x0, y0, x1, y1, …]. */
-  lines: number[][];
+  /** Plik kursu (.ttp) względem folderu mapy. */
+  tripFile: string;
+  /** Odcinki w kolejności jazdy — po jednym na wpis [track_entry]. */
+  segments: RouteSegment[];
   /** Przystanki kursu znalezione na mapie; n = numer przystanku w kursie (od 1). */
   stops: { n: number; name: string; x: number; y: number }[];
-  /** Liczba wpisów [track_entry] w .ttr i ilu nie udało się znaleźć na mapie. */
-  entries: number;
+  /** Wpisy, których nie udało się ułożyć na mapie (zostają w pliku). */
   unresolved: number;
+  /** Wpisy, w których „numer elementu na kaflu” różni się od pozycji elementu w pliku kafla. */
+  indexMismatch: number;
   /** Przystanki kursu, których nie znaleziono na mapie. */
   missingStops: string[];
+  /** Kurs nie ma jeszcze pliku .ttr (zostanie utworzony przy zapisie). */
+  noFile?: boolean;
   error?: string;
 }
