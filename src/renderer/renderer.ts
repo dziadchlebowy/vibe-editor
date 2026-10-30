@@ -888,6 +888,9 @@ async function openSettings(forced: boolean): Promise<void> {
   let omsiDir = cur.omsiDir;
   let workDir = cur.workDir;
   let maps: MapInfo[] = [];
+  /** Wartości z global.cfg wczytane do pól — punkt odniesienia do wykrywania zmian. */
+  let mapBaseline = { name: '', friendlyname: '', description: '' };
+  let updateDirty = (): void => {};
 
   const omsiInput = h('input', { type: 'text', readOnly: true, value: omsiDir, placeholder: 'Folder z grą OMSI' });
   const workInput = h('input', { type: 'text', readOnly: true, value: workDir, placeholder: 'Folder roboczy' });
@@ -915,6 +918,7 @@ async function openSettings(forced: boolean): Promise<void> {
     placeholder: 'https://claude.ai/chat/ID-CZATU',
   });
   const splineWidthInput = h('input', { type: 'text', value: cur.splineMaxWidth > 0 ? String(cur.splineMaxWidth) : '', placeholder: 'bez limitu' });
+  const parseSplineWidth = (): number => Number(splineWidthInput.value.trim().replace(',', '.')) || 0;
   const autoSendCheck = h('input', { type: 'checkbox', checked: cur.claudeAutoSend });
   const error = h('div', { class: 'error' });
 
@@ -923,6 +927,8 @@ async function openSettings(forced: boolean): Promise<void> {
     nameInput.value = m?.name ?? '';
     friendlyInput.value = m?.friendlyname ?? '';
     descInput.value = m?.description ?? '';
+    mapBaseline = { name: nameInput.value, friendlyname: friendlyInput.value, description: descInput.value };
+    updateDirty();
   };
   mapSelect.addEventListener('change', fillMapFields);
 
@@ -1007,84 +1013,152 @@ async function openSettings(forced: boolean): Promise<void> {
   const okBtn = h('button', { class: 'btn primary' }, 'Zatwierdź');
   const cancelBtn = h('button', { class: 'btn' }, 'Anuluj');
 
+  // Ustawienia podzielone na karty; karta ze zmianami ma kropkę, a przy zatwierdzaniu
+  // główny proces łączy się z repo tylko wtedy, gdy zmieniło się coś, czego to dotyczy.
+  type SettingsTab = 'general' | 'repo' | 'display' | 'claude';
+  const sections: { id: SettingsTab; label: string; changed: () => boolean }[] = [
+    {
+      id: 'general',
+      label: 'Foldery i mapa',
+      changed: () =>
+        omsiDir !== cur.omsiDir ||
+        workDir !== cur.workDir ||
+        mapSelect.value !== cur.mapFolder ||
+        nameInput.value !== mapBaseline.name ||
+        friendlyInput.value !== mapBaseline.friendlyname ||
+        descInput.value !== mapBaseline.description,
+    },
+    {
+      id: 'repo',
+      label: 'Repozytorium',
+      changed: () => remoteInput.value.trim() !== cur.remoteUrl || mainCheck.checked !== cur.workOnMain,
+    },
+    { id: 'display', label: 'Wyświetlanie', changed: () => parseSplineWidth() !== cur.splineMaxWidth },
+    {
+      id: 'claude',
+      label: 'Claude',
+      changed: () =>
+        (modeFree.checked ? 'free' : 'code') !== (cur.claudeMode === 'free' ? 'free' : 'code') ||
+        claudeInput.value.trim() !== cur.claudePath ||
+        chatInput.value.trim() !== cur.claudeChatUrl ||
+        autoSendCheck.checked !== cur.claudeAutoSend,
+    },
+  ];
+
+  const folderRow = (title: string, input: HTMLInputElement, pick: () => Promise<void>, extra?: HTMLElement): HTMLElement =>
+    h(
+      'div',
+      { class: 'field' },
+      h('label', {}, title),
+      h('div', { class: 'row' }, input, h('button', { class: 'btn', onClick: () => void pick() }, 'Przeglądaj')),
+      extra,
+    );
+
+  const panels: Record<SettingsTab, HTMLElement> = {
+    general: h(
+      'div',
+      { class: 'dlg-panel' },
+      folderRow('Folder z grą OMSI (na potrzeby assetów)', omsiInput, async () => {
+        const p = await ve.pickFolder('Wskaż folder z grą OMSI');
+        if (p) {
+          omsiDir = p;
+          omsiInput.value = p;
+          updateDirty();
+        }
+      }),
+      folderRow(
+        'Folder roboczy (zawiera folder mapy)',
+        workInput,
+        async () => {
+          const p = await ve.pickFolder('Wskaż folder roboczy');
+          if (p) {
+            await loadWorkDir(p, mapSelect.value);
+            updateDirty();
+          }
+        },
+        workError,
+      ),
+      h('hr', { class: 'sep' }),
+      mapField,
+      h('div', { class: 'field' }, h('label', {}, 'Nazwa (global.cfg → [name])'), nameInput),
+      h('div', { class: 'field' }, h('label', {}, 'Friendlyname (global.cfg → [friendlyname])'), friendlyInput),
+      h('div', { class: 'field' }, h('label', {}, 'Opis (global.cfg → [description])'), descInput),
+    ),
+    repo: h(
+      'div',
+      { class: 'dlg-panel' },
+      h('div', { class: 'field' }, h('label', {}, 'Link do repozytorium na GitHubie'), remoteInput),
+      h('label', { class: 'check' }, mainCheck, 'Pracuj na main (zamiast gałęzi „VibeEditor”)'),
+      h(
+        'div',
+        { class: 'hint' },
+        'Link, gałąź i folder roboczy są jedynymi ustawieniami, które ponownie podpinają folder pod repozytorium. ' +
+          'Zmiana samego global.cfg kończy się commitem i pushem, a pozostałe karty w ogóle nie dotykają Gita.',
+      ),
+    ),
+    display: h(
+      'div',
+      { class: 'dlg-panel' },
+      h(
+        'div',
+        { class: 'field' },
+        h('label', {}, 'Mapa: wyświetlaj spliny nie szersze niż (m)'),
+        splineWidthInput,
+        h('div', { class: 'hint' }, 'Szersze spliny (np. podłoże, tereny) nie będą rysowane na mapie. Puste lub 0 = bez limitu.'),
+      ),
+    ),
+    claude: h(
+      'div',
+      { class: 'dlg-panel' },
+      h(
+        'div',
+        { class: 'field' },
+        h('label', {}, 'Claude'),
+        h('label', { class: 'check' }, modeCode, 'Claude Code'),
+        h('label', { class: 'check' }, modeFree, 'Claude Free'),
+      ),
+      codePanel,
+      freePanel,
+    ),
+  };
+
+  const tabButtons = new Map<SettingsTab, HTMLButtonElement>();
+  const dirtyNote = h('div', { class: 'hint dlg-dirty' });
+  const tabsBar = h('div', { class: 'dlg-tabs' });
+  const showSettingsTab = (id: SettingsTab): void => {
+    for (const sec of sections) {
+      panels[sec.id].hidden = sec.id !== id;
+      tabButtons.get(sec.id)?.classList.toggle('active', sec.id === id);
+    }
+  };
+  for (const sec of sections) {
+    const btn = h('button', { class: 'tab', type: 'button', onClick: () => showSettingsTab(sec.id) }, sec.label);
+    tabButtons.set(sec.id, btn);
+    tabsBar.append(btn);
+  }
+  updateDirty = (): void => {
+    const names: string[] = [];
+    for (const sec of sections) {
+      const on = sec.changed();
+      tabButtons.get(sec.id)?.classList.toggle('changed', on);
+      if (on) names.push(sec.label);
+    }
+    dirtyNote.textContent = names.length ? `Zmienione: ${names.join(', ')}` : 'Brak zmian.';
+  };
+
   const body = h(
     'div',
     { class: 'dialog' },
     h('h2', {}, forced ? 'Konfiguracja VibeEditor' : 'Ustawienia'),
-    h(
-      'div',
-      { class: 'field' },
-      h('label', {}, 'Folder z grą OMSI (na potrzeby assetów)'),
-      h(
-        'div',
-        { class: 'row' },
-        omsiInput,
-        h(
-          'button',
-          {
-            class: 'btn',
-            onClick: async () => {
-              const p = await ve.pickFolder('Wskaż folder z grą OMSI');
-              if (p) {
-                omsiDir = p;
-                omsiInput.value = p;
-              }
-            },
-          },
-          'Przeglądaj',
-        ),
-      ),
-    ),
-    h(
-      'div',
-      { class: 'field' },
-      h('label', {}, 'Folder roboczy (zawiera folder mapy)'),
-      h(
-        'div',
-        { class: 'row' },
-        workInput,
-        h(
-          'button',
-          {
-            class: 'btn',
-            onClick: async () => {
-              const p = await ve.pickFolder('Wskaż folder roboczy');
-              if (p) await loadWorkDir(p, mapSelect.value);
-            },
-          },
-          'Przeglądaj',
-        ),
-      ),
-      workError,
-    ),
-    h('hr', { class: 'sep' }),
-    mapField,
-    h('div', { class: 'field' }, h('label', {}, 'Nazwa (global.cfg → [name])'), nameInput),
-    h('div', { class: 'field' }, h('label', {}, 'Friendlyname (global.cfg → [friendlyname])'), friendlyInput),
-    h('div', { class: 'field' }, h('label', {}, 'Opis (global.cfg → [description])'), descInput),
-    h('hr', { class: 'sep' }),
-    h('div', { class: 'field' }, h('label', {}, 'Link do repozytorium na GitHubie'), remoteInput),
-    h('label', { class: 'check' }, mainCheck, 'Pracuj na main (zamiast gałęzi „VibeEditor”)'),
-    h('hr', { class: 'sep' }),
-    h(
-      'div',
-      { class: 'field' },
-      h('label', {}, 'Mapa: wyświetlaj spliny nie szersze niż (m)'),
-      splineWidthInput,
-      h('div', { class: 'hint' }, 'Szersze spliny (np. podłoże, tereny) nie będą rysowane na mapie. Puste lub 0 = bez limitu.'),
-    ),
-    h('hr', { class: 'sep' }),
-    h(
-      'div',
-      { class: 'field' },
-      h('label', {}, 'Claude'),
-      h('label', { class: 'check' }, modeCode, 'Claude Code'),
-      h('label', { class: 'check' }, modeFree, 'Claude Free'),
-    ),
-    codePanel,
-    freePanel,
+    tabsBar,
+    h('div', { class: 'dlg-panels' }, panels.general, panels.repo, panels.display, panels.claude),
+    dirtyNote,
     error,
   );
+  body.addEventListener('input', updateDirty);
+  body.addEventListener('change', updateDirty);
+  showSettingsTab('general');
+  updateDirty();
   const actions = h('div', { class: 'modal-actions' }, ...(forced ? [] : [cancelBtn]), okBtn);
   body.append(actions);
 
@@ -1117,7 +1191,7 @@ async function openSettings(forced: boolean): Promise<void> {
       claudePath: claudeInput.value,
       claudeChatUrl: chatInput.value,
       claudeAutoSend: autoSendCheck.checked,
-      splineMaxWidth: Number(splineWidthInput.value.trim().replace(',', '.')) || 0,
+      splineMaxWidth: parseSplineWidth(),
     });
     okBtn.disabled = false;
     cancelBtn.disabled = false;

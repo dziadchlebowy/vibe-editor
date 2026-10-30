@@ -12,7 +12,7 @@ export const DEFAULT_SETTINGS: Settings = {
   claudePath: '',
   claudeChatUrl: '',
   claudeAutoSend: true,
-  splineMaxWidth: 0,
+  splineMaxWidth: 30,
   configured: false,
 };
 
@@ -38,4 +38,19 @@ export function targetBranch(s: Pick<Settings, 'workOnMain'>): string {
 
 export function vibeDir(workDir: string): string {
   return path.join(workDir, '_vibe');
+}
+
+/** Czy zmiana ustawień wymaga pełnego podpinania repo (init, origin, gałąź, fetch). */
+export function needsRepoSetup(
+  prev: Pick<Settings, 'configured' | 'workDir' | 'remoteUrl' | 'workOnMain'>,
+  next: Pick<Settings, 'workDir' | 'remoteUrl' | 'workOnMain'>,
+  hasGit: boolean,
+): boolean {
+  return (
+    !prev.configured ||
+    !hasGit ||
+    prev.workDir !== next.workDir ||
+    prev.remoteUrl !== next.remoteUrl ||
+    prev.workOnMain !== next.workOnMain
+  );
 }

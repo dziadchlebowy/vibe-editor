@@ -26,7 +26,7 @@ import { loadObjPaths } from './core/mapObjPaths.ts';
 import { loadMapStops, saveStopParams, updateStopsCache } from './core/mapStops.ts';
 import { ensureSliGuide } from './core/sliGuide.ts';
 import { buildPrompt, writePromptFile } from './core/promptBuilder.ts';
-import { loadSettings, saveSettings, targetBranch, vibeDir } from './core/settings.ts';
+import { loadSettings, needsRepoSetup, saveSettings, targetBranch, vibeDir } from './core/settings.ts';
 import { TaskStore } from './core/tasks.ts';
 
 const MAX_CONSOLE_LINES = 5000;
@@ -148,14 +148,25 @@ async function saveAll(req: SaveRequest): Promise<OkResult> {
     });
     if (changed) emit('app', `Zaktualizowano ${path.join(map.folder, 'global.cfg')}.`);
 
-    emit('app', 'Podpinanie folderu roboczego pod repozytorium…');
-    await setupRepo(new GitRunner(req.workDir, emit), {
-      workDir: req.workDir,
-      remoteUrl,
-      branch: targetBranch(req),
-    });
-
     const prev = settings;
+    const next = { workDir: req.workDir, remoteUrl, workOnMain: req.workOnMain };
+    if (needsRepoSetup(prev, next, fs.existsSync(path.join(req.workDir, '.git')))) {
+      emit('app', 'Podpinanie folderu roboczego pod repozytorium…');
+      await setupRepo(new GitRunner(req.workDir, emit), {
+        workDir: req.workDir,
+        remoteUrl,
+        branch: targetBranch(req),
+      });
+    } else if (changed) {
+      // Repo już podpięte, zmienił się tylko global.cfg: sam commit i push, bez ponownego łączenia.
+      emit('app', 'Wypychanie zmian w global.cfg do repozytorium…');
+      await syncToRemote(new GitRunner(req.workDir, emit), {
+        branch: targetBranch(req),
+        remoteUrl,
+        message: 'VibeEditor: zmiana danych mapy w global.cfg',
+      });
+    }
+
     const attachedNew =
       prev.workDir !== req.workDir ||
       prev.mapFolder !== map.folder ||
@@ -176,7 +187,7 @@ async function saveAll(req: SaveRequest): Promise<OkResult> {
       configured: true,
     };
     saveSettings(settingsFile(), settings);
-    emit('app', 'Konfiguracja zapisana, zmiany wypchnięte do repozytorium.');
+    emit('app', 'Konfiguracja zapisana.');
     win?.webContents.send('tasks:changed');
     if (attachedNew) void runIndex();
     return { ok: true };
