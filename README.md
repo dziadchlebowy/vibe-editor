@@ -51,10 +51,15 @@ Za każdym razem, gdy podłączany jest nowy folder roboczy (zmiana folderu, map
 
 Do promptu dla Claude dopisywana jest krótka notka, że dokładne dane o splinach i obiektach są w `_vibe/assets/` (Claude szuka w nich Globem/Grepem zamiast dostawać je w prompcie).
 
+## Trasa kursu (.ttr)
+
+Plik `.ttr` to lista wpisów `[track_entry]`: ID splinu lub obiektu · numer ścieżki ruchu w jego `.sli`/`.sco` · indeks kafla (kolejność `[map]` w `global.cfg`) · numer elementu na kaflu · długość · flaga. VibeEditor czyta potrzebne kafle `.map` na żądanie (bez ponownego skanowania mapy), znajduje spline/obiekt po ID, liczy przebieg wskazanej ścieżki (z kopii `.sli`/`.sco` w `_vibe/assets`) i rysuje go na mapie. Przystanki kursu bierze z `[station]` w `.ttp` (ID obiektu przystanku), a gdy go nie ma w `map-stops.json` — dopasowuje po nazwie. Założenia nie potwierdzone w grze: znaczenie 4. i 6. linijki wpisu (pomijane) oraz to, że rysowany jest cały odcinek ścieżki, a nie tylko `długość` z `.ttr`.
+
 ## Zakładki
 
 - **Zadania** — lista zadań (Aktywne / Odrzucone / Archiwum), „+ Dodaj”, „▶️ Uruchom”, „⏹️ Zatrzymaj”.
 - **Mapa** — przesuwalna i zoomowalna siatka kafli, start wycentrowany na środku mapy. Klik w kafel pokazuje w prawym górnym rogu koordynaty, plik `.map`, liczbę assetów i brakujące w OMSI. „📍 Dodaj pinezkę”: w tym trybie klik w punkt mapy otwiera nowe zadanie z tą pinezką; pinezki zadań (aktywnych i odrzuconych) są rysowane na mapie, klik w pinezkę pokazuje tytuł zadania.
+  Przybliżenie do ok. 20 px na metr. Pasek „Trasa kursu” rysuje trasę z pliku `.ttr` leżącego obok `.ttp` (ta sama nazwa) wraz z przystankami kursu; to samo robi przycisk „🗺️ Pokaż trasę na mapie” w zakładce Linie (przy kursie z plikiem `.ttr`).
 - **Jezdnie** — lista wszystkich wczytanych splinów (`[spline]`, `[spline_h]`) po ścieżce, z filtrem. Dwuklik tworzy nowe zadanie z podpiętą jezdnią.
 - **Obiekty** — drzewo obiektów z plików `.sco`: `[groups]` (liczba, a pod nią nazwy „folderów” od korzenia) i `[friendlyname]` (np. `📂 Aachen › 📂 Gruen › 🏠 Busch`). Dwuklik tworzy nowe zadanie z podpiętym obiektem.
 - **Konsola** — output Gita i Claude (filtr: wszystko / tylko Git / tylko Claude).

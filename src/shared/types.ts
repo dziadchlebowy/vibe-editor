@@ -247,6 +247,8 @@ export interface TripStation {
   id: string;
   index: number;
   name: string;
+  /** Indeks kafla ([map] w global.cfg) z obiektem przystanku — 4. linijka po [station]; -1, gdy nieznany. */
+  tile: number;
 }
 
 /** Profil czasowy kursu; czasy w minutach od startu kursu, klucz = numer przystanku (od 0). */
@@ -268,9 +270,29 @@ export interface TripFile {
   line: string;
   stations: TripStation[];
   profiles: TripProfile[];
+  /** Obok kursu leży plik .ttr z jego trasą (tylko do odczytu; nie jest zapisywane). */
+  hasTrack?: boolean;
 }
 
 export interface TimetableData {
   lines: LineFile[];
   trips: TripFile[];
+}
+
+/**
+ * Trasa kursu z pliku .ttr, gotowa do narysowania. Współrzędne w jednostkach kafli
+ * (środek kafla (x, y) to dokładnie (x, y), oś Y rośnie na północ) — jak pinezki.
+ */
+export interface TripRoute {
+  trip: string;
+  /** Polilinie odcinków trasy: płaskie tablice [x0, y0, x1, y1, …]. */
+  lines: number[][];
+  /** Przystanki kursu znalezione na mapie; n = numer przystanku w kursie (od 1). */
+  stops: { n: number; name: string; x: number; y: number }[];
+  /** Liczba wpisów [track_entry] w .ttr i ilu nie udało się znaleźć na mapie. */
+  entries: number;
+  unresolved: number;
+  /** Przystanki kursu, których nie znaleziono na mapie. */
+  missingStops: string[];
+  error?: string;
 }

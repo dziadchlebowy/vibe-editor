@@ -16,6 +16,8 @@ interface TimetableApi {
   load(): Promise<TimetableData>;
   saveLine(l: LineFile): Promise<{ ok: boolean; error?: string }>;
   saveTrip(t: TripFile): Promise<{ ok: boolean; error?: string }>;
+  /** Pokazuje trasę kursu (plik .ttp względem folderu mapy) na mapie. */
+  showRoute(tripFile: string): void;
 }
 
 /** Zakładka „Linie”: edycja linii (.ttl: brygady i godziny odjazdów) oraz kursów (.ttp: czasy przejazdu). */
@@ -470,6 +472,13 @@ export class TimetableView {
     const body = h(
       'div',
       { class: 'tt-body' },
+      h(
+        'div',
+        { class: 'toolbar' },
+        trip.hasTrack
+          ? h('button', { class: 'btn', title: 'Przełącz na mapę i narysuj trasę z pliku .ttr wraz z przystankami', onClick: () => this.api.showRoute(trip.file) }, '🗺️ Pokaż trasę na mapie')
+          : h('span', { class: 'status' }, 'Brak pliku .ttr obok kursu — trasy nie da się pokazać.'),
+      ),
       h(
         'div',
         { class: 'tt-fields' },

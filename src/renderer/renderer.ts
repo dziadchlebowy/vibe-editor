@@ -91,6 +91,8 @@ let objectsView: ObjectsView;
 let mapSummary: HTMLElement;
 let pinBtn: HTMLButtonElement;
 let rescanBtn: HTMLButtonElement;
+let routeSelect: HTMLSelectElement;
+let routeInfo: HTMLElement;
 
 // --- zakładki --------------------------------------------------------------
 
@@ -116,7 +118,10 @@ function renderTabs(): void {
             activeTab = t.id;
             renderTabs();
             if (t.id === 'console') scrollConsoleToEnd();
-            if (t.id === 'map') mapGrid?.show();
+            if (t.id === 'map') {
+              mapGrid?.show();
+              void fillRouteSelect();
+            }
             if (t.id === 'lines') void timetableView?.reload();
           },
         },
@@ -752,6 +757,50 @@ function openStopDialog(stop: GridStop): void {
   warn.textContent = hasPolishChars(p.name) ? 'Nazwa zawiera polskie znaki — zalecane ich unikanie.' : '';
 }
 
+/** Lista kursów, które mają obok plik .ttr (trasę); zachowuje bieżący wybór. */
+async function fillRouteSelect(): Promise<void> {
+  if (!routeSelect) return;
+  const keep = routeSelect.value;
+  const trips = (await ve.loadTimetable()).trips.filter((t) => t.hasTrack);
+  routeSelect.replaceChildren(
+    h('option', { value: '' }, trips.length ? '— bez trasy —' : '— brak kursów z plikiem .ttr —'),
+    ...trips.map((t) => h('option', { value: t.file }, t.title ? `${t.name} → ${t.title}` : t.name)),
+  );
+  if (trips.some((t) => t.file === keep)) routeSelect.value = keep;
+}
+
+/** Pokazuje na mapie trasę kursu (plik kursu względem folderu mapy); pusty ciąg ją ukrywa. */
+async function showTripRoute(tripFile: string, fit = true): Promise<void> {
+  if (!tripFile) {
+    mapGrid.setRoute(null);
+    routeInfo.textContent = '';
+    return;
+  }
+  routeInfo.textContent = 'Wczytuję trasę…';
+  const route = await ve.getTripRoute(tripFile);
+  if (route.error) {
+    mapGrid.setRoute(null);
+    routeInfo.textContent = route.error;
+    return;
+  }
+  mapGrid.setRoute(route);
+  const parts = [`Trasa ${route.trip}: odcinków ${route.lines.length}/${route.entries}`, `przystanków na mapie ${route.stops.length}`];
+  if (route.unresolved) parts.push(`nieznalezionych odcinków: ${route.unresolved} (przeskanuj mapę lub sprawdź .ttr)`);
+  if (route.missingStops.length) parts.push(`brak przystanków: ${route.missingStops.join(', ')}`);
+  routeInfo.textContent = parts.join(' · ');
+  if (fit) requestAnimationFrame(() => mapGrid.fitRoute());
+}
+
+/** Z zakładki Linie: przełącza na mapę i pokazuje trasę kursu. */
+async function openTripRouteOnMap(tripFile: string): Promise<void> {
+  activeTab = 'map';
+  renderTabs();
+  mapGrid.show();
+  await fillRouteSelect();
+  routeSelect.value = tripFile;
+  await showTripRoute(tripFile);
+}
+
 function mountMapTab(): void {
   const root = $('view-map');
   clear(root);
@@ -781,6 +830,10 @@ function mountMapTab(): void {
     'Przeskanuj mapę ponownie',
   );
   mapSummary = h('span', { class: 'status' });
+  routeSelect = h('select', { title: 'Pokaż na mapie trasę kursu (plik .ttr obok kursu) wraz z przystankami' });
+  routeSelect.addEventListener('change', () => void showTripRoute(routeSelect.value));
+  routeInfo = h('span', { class: 'status' });
+  void fillRouteSelect();
   root.append(
     h(
       'div',
@@ -794,6 +847,7 @@ function mountMapTab(): void {
       h('div', { class: 'spacer' }),
       mapSummary,
     ),
+    h('div', { class: 'toolbar' }, h('span', {}, 'Trasa kursu:'), routeSelect, routeInfo),
     mapGrid.el,
   );
   updateMapToolbar();
@@ -1220,6 +1274,7 @@ async function init(): Promise<void> {
     load: () => ve.loadTimetable(),
     saveLine: (l) => ve.saveLine(l),
     saveTrip: (t) => ve.saveTrip(t),
+    showRoute: (file) => void openTripRouteOnMap(file),
   });
   renderConsole();
 

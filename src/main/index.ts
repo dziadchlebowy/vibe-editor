@@ -21,6 +21,7 @@ import { applyFailed, clearFailed, writeLastRun } from './core/failed.ts';
 import { GitRunner, setupRepo, syncToRemote } from './core/git.ts';
 import { assetsDir, buildMapIndex, loadMapIndex, toCatalog, toOverview } from './core/mapIndex.ts';
 import { loadTimetable, saveLine, saveTrip } from './core/timetable.ts';
+import { loadTripRoute } from './core/tripRoute.ts';
 import { loadMapSplines } from './core/mapSplines.ts';
 import { loadObjPaths } from './core/mapObjPaths.ts';
 import { loadMapStops, saveStopParams, updateStopsCache } from './core/mapStops.ts';
@@ -394,6 +395,11 @@ function registerIpc(): void {
   ipcMain.handle('tt:load', () => {
     const d = mapDir();
     return d ? loadTimetable(d) : { lines: [], trips: [] };
+  });
+  ipcMain.handle('tt:route', (_e, tripFile: string) => {
+    const d = mapDir();
+    if (!d || !settings.workDir) return { trip: '', lines: [], stops: [], entries: 0, unresolved: 0, missingStops: [], error: 'Brak skonfigurowanej mapy.' };
+    return loadTripRoute(settings.workDir, d, tripFile);
   });
   ipcMain.handle('tt:saveLine', (_e, line: LineFile) => {
     const d = mapDir();

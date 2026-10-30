@@ -128,7 +128,7 @@ function scanTrip(text: string, file: string): { lines: string[]; scan: TripScan
       title = (lines[i + 2] ?? '').trim();
       line = (lines[i + 3] ?? '').trim();
     } else if (t === '[station]') {
-      stations.push({ id: (lines[i + 1] ?? '').trim(), index: stations.length, name: (lines[i + 3] ?? '').trim() });
+      stations.push({ id: (lines[i + 1] ?? '').trim(), index: stations.length, name: (lines[i + 3] ?? '').trim(), tile: Math.round(num(lines[i + 4] ?? '-1')) });
     } else if (t === '[profile]') {
       profiles.push({ name: (lines[i + 1] ?? '').trim(), total: num(lines[i + 2]), arr: {}, dep: {}, stop: {} });
       at.push({ arr: new Map(), dep: new Map(), stop: new Map(), end: lines.length });
@@ -234,7 +234,9 @@ export function loadTimetable(mapDir: string): TimetableData {
         const parsed = parseLine(text);
         data.lines.push({ file: rel, name: path.basename(rel).replace(/\.ttl$/i, ''), userAllowed: parsed.userAllowed, tours: parsed.tours });
       } else {
-        data.trips.push(parseTrip(text, rel));
+        const trip = parseTrip(text, rel);
+        trip.hasTrack = fs.existsSync(full.replace(/\.ttp$/i, '.ttr'));
+        data.trips.push(trip);
       }
     } catch {
       /* nieczytelny plik pomijamy */

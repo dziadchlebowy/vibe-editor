@@ -362,7 +362,7 @@ test('mapSplines: ścieżki ruchu z [path] w .sli trafiają do dróg', async () 
   const sli = '[profile]\n0\n[path]\n0\n6.825\n0.1\n3.535\n0\n\n[path]\n1\n-2.275\n0.25\n1.5\n2\n';
   assert.deepEqual(sliPaths(sli), [[6.825, 0, 0], [-2.275, 1, 2]]);
   const d = buildSplinesData(
-    [{ x: 0, y: 0, splines: [{ path: 'a.sli', x: 1, y: 2, z: 0, heading: 0, length: 10, radius: 0, mirror: false }] }],
+    [{ x: 0, y: 0, splines: [{ path: 'a.sli', id: '1', x: 1, y: 2, z: 0, heading: 0, length: 10, radius: 0, mirror: false }] }],
     () => [-4.55, 9.1],
     () => sliPaths(sli),
   );

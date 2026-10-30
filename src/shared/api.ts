@@ -15,6 +15,7 @@ import type {
   TaskView,
   TimetableData,
   TripFile,
+  TripRoute,
 } from './types.ts';
 
 /** API wystawiane rendererowi przez preload jako window.ve. */
@@ -56,6 +57,8 @@ export interface VeApi {
   loadTimetable(): Promise<TimetableData>;
   saveLine(line: LineFile): Promise<OkResult>;
   saveTrip(trip: TripFile): Promise<OkResult>;
+  /** Trasa kursu z pliku .ttr leżącego obok .ttp (plik kursu względem folderu mapy). */
+  getTripRoute(tripFile: string): Promise<TripRoute>;
 
   /** Okno bez natywnej ramki (motyw XP): własne przyciski minimalizuj / maksymalizuj / zamknij. */
   windowControl(action: 'minimize' | 'maximize' | 'close'): Promise<void>;

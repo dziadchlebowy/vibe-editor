@@ -13,6 +13,8 @@ export const DEFAULT_EXTENT: [number, number] = [-3, 3];
 /** Jeden spline z kafla; pozycja lokalna w metrach (0..300, początek w rogu kafla), azymut w stopniach od północy. */
 export interface RawSpline {
   path: string;
+  /** ID własne splinu (linijka 2 wpisu) — tak odwołuje się do niego plik .ttr. */
+  id: string;
   x: number;
   y: number;
   heading: number;
@@ -39,7 +41,7 @@ export function parseTileSplines(text: string): RawSpline[] {
     const [x, y, heading, length, radius] = [5, 7, 8, 9, 10].map((i) => Number(rec![i].replace(',', '.')));
     const z = Number(rec![6].replace(',', '.'));
     if (!p || ![x, y, heading, length, radius].every(Number.isFinite) || length <= 0) return;
-    out.push({ path: p, x, y, z: Number.isFinite(z) ? z : 0, heading, length, radius, mirror: rec.slice(11).some((l) => l.toLowerCase() === 'mirror') });
+    out.push({ path: p, id: rec![2] ?? '', x, y, z: Number.isFinite(z) ? z : 0, heading, length, radius, mirror: rec.slice(11).some((l) => l.toLowerCase() === 'mirror') });
   };
   for (const line of splitLines(text)) {
     const t = line.trim();

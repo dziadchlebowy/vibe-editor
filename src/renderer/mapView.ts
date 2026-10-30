@@ -1,5 +1,5 @@
 import { toParams } from '../shared/busStop.ts';
-import type { MapObjPaths, MapOverview, MapSplines, MapStops, MapTileView, TaskPin, TileCoord } from '../shared/types.ts';
+import type { MapObjPaths, MapOverview, MapSplines, MapStops, MapTileView, TaskPin, TileCoord, TripRoute } from '../shared/types.ts';
 import { clear, h } from './dom.ts';
 
 /**
@@ -9,7 +9,7 @@ import { clear, h } from './dom.ts';
  */
 
 const MIN_SCALE = 3;
-const MAX_SCALE = 400;
+const MAX_SCALE = 6000; // px na kafel (300 m): 6000 → 20 px na metr
 const DRAG_THRESHOLD = 4;
 const PIN_HIT_RADIUS = 11;
 
@@ -58,6 +58,7 @@ export class MapGrid {
   private maxWidth = 0;
   private objPaths: MapObjPaths | null = null;
   private stops: MapStops | null = null;
+  private route: TripRoute | null = null;
   private tip: HTMLElement;
   private selectedTile: MapTileView | null = null;
   private selectedPin: GridPin | null = null;
@@ -140,6 +141,32 @@ export class MapGrid {
 
   setStops(data: MapStops | null): void {
     this.stops = data;
+    this.draw();
+  }
+
+  /** Trasa kursu (z .ttr) z jego przystankami; null ją ukrywa. */
+  setRoute(route: TripRoute | null): void {
+    this.route = route;
+    this.draw();
+  }
+
+  /** Przybliża widok tak, by cała trasa kursu była widoczna. */
+  fitRoute(): void {
+    const w = this.canvas.clientWidth;
+    const hh = this.canvas.clientHeight;
+    const r = this.route;
+    if (!r || w === 0 || hh === 0) return;
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (const l of r.lines) for (let i = 0; i < l.length; i += 2) (xs.push(l[i]), ys.push(l[i + 1]));
+    for (const s of r.stops) (xs.push(s.x), ys.push(s.y));
+    if (xs.length === 0) return;
+    const [minX, maxX, minY, maxY] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    this.cx = (minX + maxX) / 2;
+    this.cy = (minY + maxY) / 2;
+    const fit = Math.min(w / Math.max(maxX - minX, 0.02), hh / Math.max(maxY - minY, 0.02)) * 0.85;
+    this.scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, fit));
+    this.needFit = false;
     this.draw();
   }
 
@@ -226,6 +253,56 @@ export class MapGrid {
             ctx.stroke();
           }
         }
+      }
+    }
+  }
+
+  /** Trasa kursu: biały kontur + jaskrawa linia; przystanki jako numerowane kółka z nazwą przy większym zbliżeniu. */
+  private drawRoute(w: number, hh: number): void {
+    const r = this.route;
+    if (!r) return;
+    const ctx = this.ctx;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (const pass of [0, 1]) {
+      ctx.strokeStyle = pass === 0 ? '#ffffff' : '#e8590c';
+      ctx.lineWidth = pass === 0 ? 6 : 3.4;
+      for (const l of r.lines) {
+        ctx.beginPath();
+        for (let i = 0; i < l.length; i += 2) {
+          const px = this.sx(l[i], w);
+          const py = this.sy(l[i + 1], hh);
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+    }
+    const rad = 9;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const s of r.stops) {
+      const x = this.sx(s.x, w);
+      const y = this.sy(s.y, hh);
+      if (x < -20 || y < -20 || x > w + 20 || y > hh + 20) continue;
+      ctx.beginPath();
+      ctx.arc(x, y, rad, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffd400';
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#1b1b1b';
+      ctx.stroke();
+      ctx.fillStyle = '#1b1b1b';
+      ctx.font = 'bold 10px Tahoma, sans-serif';
+      ctx.fillText(String(s.n), x, y + 0.5);
+      if (this.scale >= 600) {
+        ctx.font = 'bold 12px Tahoma, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = '#ffffff';
+        ctx.strokeText(s.name, x + rad + 4, y);
+        ctx.fillText(s.name, x + rad + 4, y);
+        ctx.textAlign = 'center';
       }
     }
   }
@@ -632,6 +709,7 @@ export class MapGrid {
     this.drawSplines(w, hh);
     this.drawObjPaths(w, hh);
     this.drawStops(w, hh);
+    this.drawRoute(w, hh);
 
     if (this.selectedTile && this.opts.mode === 'info') {
       const left = this.sx(this.selectedTile.x - 0.5, w);

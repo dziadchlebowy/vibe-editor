@@ -37,6 +37,7 @@ const api: VeApi = {
   loadTimetable: () => ipcRenderer.invoke('tt:load'),
   saveLine: (line) => ipcRenderer.invoke('tt:saveLine', line),
   saveTrip: (trip) => ipcRenderer.invoke('tt:saveTrip', trip),
+  getTripRoute: (tripFile) => ipcRenderer.invoke('tt:route', tripFile),
 
   windowControl: (action) => ipcRenderer.invoke('win:control', action),
   isWindowMaximized: () => ipcRenderer.invoke('win:isMaximized'),
