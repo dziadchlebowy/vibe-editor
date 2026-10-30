@@ -215,8 +215,36 @@ function walk(dir: string, rel: string, depth: number, out: string[]): void {
   for (const e of entries) {
     const r = rel ? `${rel}/${e.name}` : e.name;
     if (e.isDirectory()) walk(path.join(dir, e.name), r, depth + 1, out);
-    else if (/\.(ttl|ttp)$/i.test(e.name)) out.push(r);
+    else if (/\.(ttl|ttp|ttr)$/i.test(e.name)) out.push(r);
   }
+}
+
+const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+const baseOf = (rel: string): string => path.basename(rel).replace(/\.[^.]+$/, '');
+
+/**
+ * Szuka pliku .ttr kursu wśród plików .ttr z folderu mapy (ścieżki względne). Kolejność:
+ * ta sama nazwa w tym samym folderze → ta sama nazwa w dowolnym folderze (bez względu na wielkość liter) →
+ * nazwa zgodna po pominięciu znaków specjalnych („144-TP-SZL” = „144_TP-SZL”), też wg nazwy wewnętrznej z [trip].
+ */
+export function findTrackFile(ttrFiles: string[], tripRel: string, internalName = ''): string | undefined {
+  const name = baseOf(tripRel).toLowerCase();
+  const dir = path.posix.dirname(tripRel.replace(/\\/g, '/'));
+  const same = (r: string): boolean => baseOf(r).toLowerCase() === name;
+  const inDir = (r: string): boolean => path.posix.dirname(r.replace(/\\/g, '/')) === dir;
+  return (
+    ttrFiles.find((r) => same(r) && inDir(r)) ??
+    ttrFiles.find(same) ??
+    ttrFiles.find((r) => norm(baseOf(r)) === norm(name)) ??
+    (internalName ? ttrFiles.find((r) => norm(baseOf(r)) === norm(internalName)) : undefined)
+  );
+}
+
+/** Wszystkie pliki .ttr z folderu mapy (ścieżki względne). */
+export function listTrackFiles(mapDir: string): string[] {
+  const files: string[] = [];
+  walk(mapDir, '', 0, files);
+  return files.filter((f) => /\.ttr$/i.test(f));
 }
 
 /** Wczytuje wszystkie linie (.ttl) i kursy (.ttp) z folderu mapy. */
@@ -225,7 +253,9 @@ export function loadTimetable(mapDir: string): TimetableData {
   walk(mapDir, '', 0, files);
   files.sort((a, b) => a.localeCompare(b, 'pl'));
   const data: TimetableData = { lines: [], trips: [] };
+  const ttrs = files.filter((f) => /\.ttr$/i.test(f));
   for (const rel of files) {
+    if (/\.ttr$/i.test(rel)) continue;
     const full = safeJoin(mapDir, rel);
     if (!full) continue;
     try {
@@ -235,7 +265,7 @@ export function loadTimetable(mapDir: string): TimetableData {
         data.lines.push({ file: rel, name: path.basename(rel).replace(/\.ttl$/i, ''), userAllowed: parsed.userAllowed, tours: parsed.tours });
       } else {
         const trip = parseTrip(text, rel);
-        trip.hasTrack = fs.existsSync(full.replace(/\.ttp$/i, '.ttr'));
+        trip.trackFile = findTrackFile(ttrs, rel, trip.internalName);
         data.trips.push(trip);
       }
     } catch {

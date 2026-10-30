@@ -5,7 +5,7 @@ import { decodeCfg, splitLines } from './globalCfg.ts';
 import { assetsDir, parseTiles, safeJoin, type TileRef } from './mapIndex.ts';
 import { loadMapStops, parseTileObjects, type RawObject } from './mapStops.ts';
 import { parseTileSplines, type RawSpline } from './mapSplines.ts';
-import { parseTrip } from './timetable.ts';
+import { findTrackFile, listTrackFiles, parseTrip } from './timetable.ts';
 
 /**
  * Wpis [track_entry] z pliku .ttr (kolejne linijki po znaczniku):
@@ -207,12 +207,13 @@ export function loadTripRoute(workDir: string, mapDir: string, tripFileRel: stri
   const empty = (error: string): TripRoute => ({ trip: path.basename(tripFileRel).replace(/\.ttp$/i, ''), lines: [], stops: [], entries: 0, unresolved: 0, missingStops: [], error });
   const ttpFull = /\.ttp$/i.test(tripFileRel) ? safeJoin(mapDir, tripFileRel) : null;
   if (!ttpFull || !fs.existsSync(ttpFull)) return empty('Nie ma takiego kursu w folderze mapy.');
-  const ttrFull = ttpFull.replace(/\.ttp$/i, '.ttr');
-  if (!fs.existsSync(ttrFull)) return empty('Obok kursu nie ma pliku .ttr z trasą.');
+  const trip = parseTrip(decodeCfg(fs.readFileSync(ttpFull)).text, tripFileRel);
+  const ttrRel = findTrackFile(listTrackFiles(mapDir), tripFileRel, trip.internalName);
+  const ttrFull = ttrRel ? safeJoin(mapDir, ttrRel) : null;
+  if (!ttrFull || !fs.existsSync(ttrFull)) return empty('W folderze mapy nie ma pliku .ttr o nazwie tego kursu.');
   const cfgName = fs.readdirSync(mapDir).find((f) => f.toLowerCase() === 'global.cfg');
   if (!cfgName) return empty('Brak pliku global.cfg w folderze mapy.');
 
-  const trip = parseTrip(decodeCfg(fs.readFileSync(ttpFull)).text, tripFileRel);
   const entries = parseTtr(decodeCfg(fs.readFileSync(ttrFull)).text);
   if (entries.length === 0) return empty('Plik .ttr nie zawiera wpisów [track_entry].');
 

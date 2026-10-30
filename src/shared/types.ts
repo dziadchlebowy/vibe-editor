@@ -270,8 +270,8 @@ export interface TripFile {
   line: string;
   stations: TripStation[];
   profiles: TripProfile[];
-  /** Obok kursu leży plik .ttr z jego trasą (tylko do odczytu; nie jest zapisywane). */
-  hasTrack?: boolean;
+  /** Plik .ttr z trasą kursu (względem folderu mapy), jeśli go znaleziono; tylko do odczytu, nie jest zapisywany. */
+  trackFile?: string;
 }
 
 export interface TimetableData {

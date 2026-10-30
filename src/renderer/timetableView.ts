@@ -475,9 +475,9 @@ export class TimetableView {
       h(
         'div',
         { class: 'toolbar' },
-        trip.hasTrack
+        trip.trackFile
           ? h('button', { class: 'btn', title: 'Przełącz na mapę i narysuj trasę z pliku .ttr wraz z przystankami', onClick: () => this.api.showRoute(trip.file) }, '🗺️ Pokaż trasę na mapie')
-          : h('span', { class: 'status' }, 'Brak pliku .ttr obok kursu — trasy nie da się pokazać.'),
+          : h('span', { class: 'status' }, 'Nie znaleziono pliku .ttr o nazwie tego kursu — trasy nie da się pokazać.'),
       ),
       h(
         'div',

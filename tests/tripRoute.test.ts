@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { findTrackFile } from '../src/main/core/timetable.ts';
 import { arcPoints, buildTripRoute, loadTripRoute, objectPathPoints, parseTtr, scoPathAt, sliPathOffset } from '../src/main/core/tripRoute.ts';
 import { loadTimetable, parseTrip } from '../src/main/core/timetable.ts';
 
@@ -74,20 +75,30 @@ test('trasa kursu: spline i obiekt po ID, przystanek po ID obiektu', () => {
   assert.ok(Math.abs(route.stops[0].x - 3) < 1e-9 && Math.abs(route.stops[0].y - 4) < 1e-9);
 });
 
-test('loadTripRoute i hasTrack: .ttr obok .ttp', () => {
+test('loadTripRoute i trackFile: .ttr o nazwie kursu, także w innym folderze', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 've-route-'));
   const map = path.join(dir, 'map');
   fs.mkdirSync(path.join(map, 'TTData'), { recursive: true });
   fs.writeFileSync(path.join(map, 'global.cfg'), ['[map]', '3', '4', 'a.map', ''].join(NL));
   fs.writeFileSync(path.join(map, 'a.map'), TILE_A);
   fs.writeFileSync(path.join(map, 'TTData', 'T.ttp'), ['[trip]', 'T', 'Cel', '1', ''].join(NL));
-  assert.equal(loadTimetable(map).trips[0].hasTrack, false);
+  assert.equal(loadTimetable(map).trips[0].trackFile, undefined);
   assert.match(loadTripRoute(dir, map, 'TTData/T.ttp').error ?? '', /\.ttr/);
-  fs.writeFileSync(path.join(map, 'TTData', 'T.ttr'), TTR);
-  assert.equal(loadTimetable(map).trips[0].hasTrack, true);
+  // .ttr w innym folderze i z inną wielkością liter nazwy
+  fs.mkdirSync(path.join(map, 'Tracks'), { recursive: true });
+  fs.writeFileSync(path.join(map, 'Tracks', 't.TTR'), TTR);
+  assert.equal(loadTimetable(map).trips[0].trackFile, 'Tracks/t.TTR');
   const r = loadTripRoute(dir, map, 'TTData/T.ttp');
   assert.equal(r.entries, 2);
   assert.equal(r.lines.length, 1); // 1565349 jest na kaflu, 1564947 nie
   assert.equal(r.unresolved, 1);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('findTrackFile: pierwszeństwo tego samego folderu, potem nazwa wewnętrzna z [trip] (- i _ bez znaczenia)', () => {
+  const files = ['A/144_TP-SZL.ttr', 'B/144_TP-SZL.ttr', 'C/144-tp-fso.ttr'];
+  assert.equal(findTrackFile(files, 'B/144_TP-SZL.ttp'), 'B/144_TP-SZL.ttr');
+  assert.equal(findTrackFile(files, 'Z/144_TP-SZL.ttp'), 'A/144_TP-SZL.ttr');
+  assert.equal(findTrackFile(files, 'Z/jakas.ttp', '144_TP-FSO'), 'C/144-tp-fso.ttr');
+  assert.equal(findTrackFile(files, 'Z/brak.ttp'), undefined);
 });

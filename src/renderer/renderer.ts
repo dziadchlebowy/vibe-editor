@@ -761,9 +761,9 @@ function openStopDialog(stop: GridStop): void {
 async function fillRouteSelect(): Promise<void> {
   if (!routeSelect) return;
   const keep = routeSelect.value;
-  const trips = (await ve.loadTimetable()).trips.filter((t) => t.hasTrack);
+  const trips = (await ve.loadTimetable()).trips.filter((t) => t.trackFile);
   routeSelect.replaceChildren(
-    h('option', { value: '' }, trips.length ? '— bez trasy —' : '— brak kursów z plikiem .ttr —'),
+    h('option', { value: '' }, trips.length ? '— bez trasy —' : '— nie znaleziono plików .ttr o nazwach kursów —'),
     ...trips.map((t) => h('option', { value: t.file }, t.title ? `${t.name} → ${t.title}` : t.name)),
   );
   if (trips.some((t) => t.file === keep)) routeSelect.value = keep;
