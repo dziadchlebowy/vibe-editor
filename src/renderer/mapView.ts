@@ -45,6 +45,7 @@ export class MapGrid {
   private pins: GridPin[] = [];
   private splines: MapSplines | null = null;
   private roadColors: string[] = [];
+  private layers = { paths: false };
   private selectedTile: MapTileView | null = null;
   private selectedPin: GridPin | null = null;
   private chosen = new Map<string, TileCoord>();
@@ -98,6 +99,12 @@ export class MapGrid {
       const t = Math.max(0, Math.min(1, (r.b - r.a - 2) / 20));
       return `hsl(${Math.round(215 - t * 170)} 30% ${Math.round(26 + t * 24)}%)`;
     });
+    this.draw();
+  }
+
+  /** Warstwy dodatkowe: ścieżki ruchu ze splinów (rysowane na wierzchu splinów). */
+  setLayers(l: { paths: boolean }): void {
+    this.layers = { ...l };
     this.draw();
   }
 
@@ -373,32 +380,43 @@ export class MapGrid {
       for (const s of t.s) visible.push({ left, top, s });
     }
     visible.sort((p, q) => (p.s[7] ?? 0) - (q.s[7] ?? 0));
+    const trace = (left: number, top: number, s: number[], c: number): void => {
+      const [, lx, ly, hdg, len, radius] = s;
+      const k = radius !== 0 ? 1 / radius : 0; // dodatni promień = skręt w prawo (zgodnie z azymutem)
+      const phi0 = (hdg * Math.PI) / 180;
+      const steps = k === 0 ? 1 : Math.max(1, Math.ceil(Math.abs(len * k) / (Math.PI / 36)));
+      ctx.beginPath();
+      for (let i = 0; i <= steps; i++) {
+        const sLen = (len * i) / steps;
+        const phi = phi0 + k * sLen;
+        const mx = k === 0 ? Math.sin(phi0) * sLen : (Math.cos(phi0) - Math.cos(phi)) / k;
+        const my = k === 0 ? Math.cos(phi0) * sLen : (Math.sin(phi) - Math.sin(phi0)) / k;
+        const px = left + (lx + mx + Math.cos(phi) * c) * mPx;
+        const py = top + (300 - (ly + my - Math.sin(phi) * c)) * mPx;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+    };
     for (const { left, top, s } of visible) {
-      {
-        const [ri, lx, ly, hdg, len, radius, mirror] = s;
-        const road = data.roads[ri];
-        if (!road) continue;
-        // środek przekroju względem osi splinu (po odbiciu zmienia stronę)
-        const c = ((road.a + road.b) / 2) * (mirror ? -1 : 1);
-        const k = radius !== 0 ? 1 / radius : 0; // dodatni promień = skręt w prawo (zgodnie z azymutem)
-        const phi0 = (hdg * Math.PI) / 180;
-        const steps = k === 0 ? 1 : Math.max(1, Math.ceil(Math.abs(len * k) / (Math.PI / 36)));
-        ctx.beginPath();
-        for (let i = 0; i <= steps; i++) {
-          const sLen = (len * i) / steps;
-          const phi = phi0 + k * sLen;
-          const mx = k === 0 ? Math.sin(phi0) * sLen : (Math.cos(phi0) - Math.cos(phi)) / k;
-          const my = k === 0 ? Math.cos(phi0) * sLen : (Math.sin(phi) - Math.sin(phi0)) / k;
-          const ex = lx + mx + Math.cos(phi) * c;
-          const ey = ly + my - Math.sin(phi) * c;
-          const px = left + ex * mPx;
-          const py = top + (300 - ey) * mPx;
-          if (i === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
+      const road = data.roads[s[0]];
+      if (!road) continue;
+      // środek przekroju względem osi splinu (po odbiciu zmienia stronę)
+      trace(left, top, s, ((road.a + road.b) / 2) * (s[6] ? -1 : 1));
+      ctx.strokeStyle = this.roadColors[s[0]] ?? '#444';
+      ctx.lineWidth = Math.max(1, (road.b - road.a) * mPx);
+      ctx.stroke();
+    }
+    if (this.layers.paths) {
+      // ścieżki ruchu nad wszystkimi splinami: jasny kontur + jaskrawa linia
+      for (const pass of [0, 1]) {
+        ctx.strokeStyle = pass === 0 ? '#ffffff' : '#ff1fd0';
+        ctx.lineWidth = pass === 0 ? 3.4 : 1.6;
+        for (const { left, top, s } of visible) {
+          for (const [x] of data.roads[s[0]]?.t ?? []) {
+            trace(left, top, s, x * (s[6] ? -1 : 1));
+            ctx.stroke();
+          }
         }
-        ctx.strokeStyle = this.roadColors[ri] ?? '#444';
-        ctx.lineWidth = Math.max(1, (road.b - road.a) * mPx);
-        ctx.stroke();
       }
     }
   }

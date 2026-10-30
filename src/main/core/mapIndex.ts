@@ -7,6 +7,7 @@ import { decodeCfg, splitLines } from './globalCfg.ts';
 import {
   buildSplinesData,
   extentFromAssets,
+  pathsFromAssets,
   parseTileSplines,
   splinesPath,
   type TileSplines,
@@ -376,7 +377,7 @@ export async function buildMapIndex(o: BuildOptions): Promise<MapIndex> {
   o.emit('app', `Obiektów (.sco) wczytanych do drzewa: ${objects.filter((x) => x.k).length}/${objects.length}.`);
 
   tileSplines.sort((a, b) => a.y - b.y || a.x - b.x);
-  const splineData = buildSplinesData(tileSplines, extentFromAssets(dstRoot));
+  const splineData = buildSplinesData(tileSplines, extentFromAssets(dstRoot), pathsFromAssets(dstRoot));
   fs.writeFileSync(splinesPath(o.workDir), JSON.stringify(splineData), 'utf-8');
   o.emit('app', `Splinów do narysowania na mapie: ${splineData.tiles.reduce((n, t) => n + t.s.length, 0)}.`);
 

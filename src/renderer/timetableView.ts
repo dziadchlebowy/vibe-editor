@@ -27,6 +27,7 @@ export class TimetableView {
   private profileIdx = 0;
   private lineMode: 'list' | 'chart' = 'list';
   private pxPerMin = 1.4;
+  private shiftOnly = '';
   private selTrip: { tour: number; trip: number } | null = null;
   private dirty = false;
   private side = h('div', { class: 'tt-side' });
@@ -209,6 +210,17 @@ export class TimetableView {
       this.markDirty();
     });
     const shift = h('input', { type: 'text', class: 'tt-short', value: '5', title: 'Przesunięcie w minutach' });
+    // przesuwanie tylko kursów wybranego profilu (np. 144-TP-FSO); domyślnie wszystkie
+    const names = [...new Set(tour.trips.map((t) => t.trip))];
+    const only = h(
+      'select',
+      { class: 'tt-only', title: 'Które kursy przesunąć' },
+      h('option', { value: '' }, 'wszystkie kursy'),
+      ...names.map((n) => h('option', { value: n, selected: n === this.shiftOnly }, n)),
+    );
+    only.addEventListener('change', () => {
+      this.shiftOnly = only.value;
+    });
     const act = (label: string, title: string, fn: () => void): HTMLElement =>
       h('button', { class: 'btn', title, onClick: fn }, label);
 
@@ -267,11 +279,13 @@ export class TimetableView {
           this.markDirty();
           this.renderMain();
         }),
+        only,
         shift,
-        act('Przesuń o min', 'Przesuwa wszystkie kursy brygady (wartość ujemna cofa)', () => {
+        act('Przesuń o min', 'Przesuwa wskazane kursy brygady o podaną liczbę minut (ujemna wartość cofa)', () => {
           const d = numOr(shift.value, 0);
-          if (tour.trips.some((t) => t.start + d < 0)) return;
-          for (const t of tour.trips) t.start += d;
+          const picked = tour.trips.filter((t) => !only.value || t.trip === only.value);
+          if (picked.some((t) => t.start + d < 0 || t.start + d >= 1440)) return;
+          for (const t of picked) t.start += d;
           this.markDirty();
           this.renderMain();
         }),

@@ -5,6 +5,7 @@ import type {
   MapCatalog,
   MapInfo,
   MapOverview,
+  MapSplines,
   RunState,
   Settings,
   TaskAttachment,
@@ -82,6 +83,7 @@ let mapBusy = false;
 let pinMode = false;
 
 let mapGrid: MapGrid;
+let splinesData: MapSplines | null = null;
 let roadsView: RoadsView;
 let timetableView: TimetableView;
 let objectsView: ObjectsView;
@@ -597,6 +599,7 @@ function openMapPicker(o: PickerOptions): void {
     },
   });
   grid.setData(overview);
+  grid.setSplines(splinesData);
   if (o.mode === 'select') {
     grid.setSelection(o.tiles ?? []);
     counter.textContent = `Zaznaczono kafli: ${(o.tiles ?? []).length}`;
@@ -664,6 +667,17 @@ function setPinMode(on: boolean): void {
   updateMapToolbar();
 }
 
+const mapLayers = { paths: false };
+
+function layerBox(label: string, title: string, key: keyof typeof mapLayers): HTMLElement {
+  const cb = h('input', { type: 'checkbox', checked: mapLayers[key] });
+  cb.addEventListener('change', () => {
+    mapLayers[key] = cb.checked;
+    mapGrid.setLayers(mapLayers);
+  });
+  return h('label', { class: 'tt-check', title }, cb, label);
+}
+
 function mountMapTab(): void {
   const root = $('view-map');
   clear(root);
@@ -699,6 +713,7 @@ function mountMapTab(): void {
       h('button', { class: 'btn', onClick: () => mapGrid.fit() }, 'Wycentruj'),
       pinBtn,
       rescanBtn,
+      layerBox('Ścieżki', 'Ścieżki ruchu ze splinów (po przeskanowaniu mapy)', 'paths'),
       h('div', { class: 'spacer' }),
       mapSummary,
     ),
@@ -714,7 +729,8 @@ async function refreshMap(): Promise<void> {
   updateStatusBar();
   mapGrid.setBusy(mapBusy);
   mapGrid.setData(overview);
-  mapGrid.setSplines(await ve.getMapSplines());
+  splinesData = await ve.getMapSplines();
+  mapGrid.setSplines(splinesData);
   roadsView.setCatalog(catalog);
   objectsView.setCatalog(catalog);
   updateMapToolbar();

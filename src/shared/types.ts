@@ -181,7 +181,7 @@ export interface MapCatalog {
 export interface MapSplines {
   version: 1;
   /** Drogi: ścieżka .sli i zakres X przekroju (min, max) w metrach. */
-  roads: { p: string; a: number; b: number }[];
+  roads: { p: string; a: number; b: number; /** ścieżki ruchu: [x, typ, kierunek] */ t?: number[][] }[];
   tiles: { x: number; y: number; s: number[][] }[];
 }
 

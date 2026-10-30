@@ -356,3 +356,15 @@ test('mapSplines: wpisy [spline]/[spline_h] z prawdziwego kafla i zakres przekro
   assert.deepEqual(data.tiles[0].s[1].slice(0, 1).concat(data.tiles[0].s[1][6]), [1, 1]);
   assert.equal(data.tiles[0].s[0][7], 0);
 });
+
+test('mapSplines: ścieżki ruchu z [path] w .sli trafiają do dróg', async () => {
+  const { sliPaths, buildSplinesData } = await import('../src/main/core/mapSplines.ts');
+  const sli = '[profile]\n0\n[path]\n0\n6.825\n0.1\n3.535\n0\n\n[path]\n1\n-2.275\n0.25\n1.5\n2\n';
+  assert.deepEqual(sliPaths(sli), [[6.825, 0, 0], [-2.275, 1, 2]]);
+  const d = buildSplinesData(
+    [{ x: 0, y: 0, splines: [{ path: 'a.sli', x: 1, y: 2, z: 0, heading: 0, length: 10, radius: 0, mirror: false }] }],
+    () => [-4.55, 9.1],
+    () => sliPaths(sli),
+  );
+  assert.equal(d.roads[0].t?.length, 2);
+});

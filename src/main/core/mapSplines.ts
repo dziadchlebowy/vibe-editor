@@ -55,6 +55,26 @@ export function parseTileSplines(text: string): RawSpline[] {
   return out;
 }
 
+/**
+ * Ścieżki ruchu z pliku .sli ([path]: typ, X środka, wysokość, szerokość, kierunek) jako krotki
+ * [x, typ, kierunek]; typ: 0 pojazdy drogowe, 1 piesi, 2 szynowe, 3 powietrzne.
+ */
+export function sliPaths(text: string): number[][] {
+  const lines = splitLines(text);
+  const out: number[][] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim().toLowerCase() !== '[path]') continue;
+    const v: number[] = [];
+    for (let j = i + 1; j < lines.length && v.length < 5; j++) {
+      const t = lines[j].trim();
+      if (t.startsWith('[')) break;
+      if (t) v.push(Number(t.replace(',', '.')));
+    }
+    if (v.length >= 5 && v.every(Number.isFinite)) out.push([Math.round(v[1] * 1000) / 1000, v[0], v[4]]);
+  }
+  return out;
+}
+
 /** Zakres X (min, max) wszystkich punktów [profilepnt] w pliku .sli; null, gdy brak punktów. */
 export function sliExtent(text: string): [number, number] | null {
   const lines = splitLines(text);
@@ -84,7 +104,11 @@ export interface TileSplines {
 }
 
 /** Składa zwarty plik: lista dróg z zakresem przekroju + spliny kafli jako krotki liczb. */
-export function buildSplinesData(tiles: TileSplines[], extentOf: (rel: string) => [number, number] | null): MapSplines {
+export function buildSplinesData(
+  tiles: TileSplines[],
+  extentOf: (rel: string) => [number, number] | null,
+  pathsOf: (rel: string) => number[][] = () => [],
+): MapSplines {
   const idx = new Map<string, number>();
   const roads: MapSplines['roads'] = [];
   const outTiles: MapSplines['tiles'] = [];
@@ -97,7 +121,8 @@ export function buildSplinesData(tiles: TileSplines[], extentOf: (rel: string) =
       let i = idx.get(key);
       if (i === undefined) {
         const e = extentOf(sp.path) ?? DEFAULT_EXTENT;
-        i = roads.push({ p: sp.path, a: r3(e[0]), b: r3(e[1]) }) - 1;
+        const t = pathsOf(sp.path);
+        i = roads.push({ p: sp.path, a: r3(e[0]), b: r3(e[1]), ...(t.length ? { t } : {}) }) - 1;
         idx.set(key, i);
       }
       s.push([i, r3(sp.x), r3(sp.y), r3(sp.heading), r3(sp.length), r3(sp.radius), sp.mirror ? 1 : 0, r3(sp.z)]);
@@ -116,6 +141,19 @@ export function extentFromAssets(assetsRoot: string): (rel: string) => [number, 
       return sliExtent(decodeCfg(fs.readFileSync(f)).text);
     } catch {
       return null;
+    }
+  };
+}
+
+/** Czyta ścieżki ruchu z kopii plików .sli w _vibe/assets. */
+export function pathsFromAssets(assetsRoot: string): (rel: string) => number[][] {
+  return (rel) => {
+    const f = safeJoin(assetsRoot, rel);
+    if (!f) return [];
+    try {
+      return sliPaths(decodeCfg(fs.readFileSync(f)).text);
+    } catch {
+      return [];
     }
   };
 }

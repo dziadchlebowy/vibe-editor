@@ -590,3 +590,4 @@ select.tt-stop { width: 100%; }
 .tt-block.clash { background: linear-gradient(#f2a29a, #d9534a); border-color: #8b1a12; }
 .tt-block.unknown { background: linear-gradient(#bbb, #888); border-color: #555; }
 .tt-block.sel { outline: 2px solid #ffb400; z-index: 1; }
+select.tt-only { max-width: 170px; }
