@@ -573,3 +573,20 @@ input.tt-num { width: 100%; text-align: right; }
 input.bad { border-color: var(--danger); background: #fff0ef; }
 .status.warn { color: #b25a00; font-weight: bold; }
 .status.bad { color: var(--danger); }
+
+.tt-check { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.tt-days { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+select.tt-stop { width: 100%; }
+.tt-trow { grid-template-columns: 40px 1fr 90px 90px 190px; }
+.tt-chart { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0; }
+.tt-scroll { flex: 1; overflow: auto; background: #fff; border: 1px solid var(--xp-field); position: relative; }
+.tt-ruler { position: sticky; top: 0; height: 20px; background: var(--bg); border-bottom: 1px solid #aca899; z-index: 2; margin-left: 90px; }
+.tt-tick { position: absolute; top: 2px; font-size: 11px; color: var(--muted); border-left: 1px solid #aca899; padding-left: 3px; height: 16px; }
+.tt-lane { display: flex; border-bottom: 1px solid #ddd; }
+.tt-lane-label { position: sticky; left: 0; flex: 0 0 90px; width: 90px; background: var(--bg); padding: 6px; z-index: 1; border-right: 1px solid #aca899; font-weight: bold; }
+.tt-track { position: relative; height: 36px; flex: none; background: repeating-linear-gradient(90deg, #fff 0, #fff calc(100% / 24 - 1px), #eee calc(100% / 24 - 1px), #eee calc(100% / 24)); }
+.tt-block { position: absolute; top: 4px; height: 28px; box-sizing: border-box; background: linear-gradient(#8fb4ee, #5b8ee0); border: 1px solid #1b4f9c; border-radius: 3px; color: #fff; font-size: 11px; line-height: 13px; padding: 1px 3px; overflow: hidden; white-space: nowrap; cursor: ew-resize; touch-action: none; user-select: none; }
+.tt-block em { display: block; font-style: normal; opacity: .9; overflow: hidden; text-overflow: ellipsis; }
+.tt-block.clash { background: linear-gradient(#f2a29a, #d9534a); border-color: #8b1a12; }
+.tt-block.unknown { background: linear-gradient(#bbb, #888); border-color: #555; }
+.tt-block.sel { outline: 2px solid #ffb400; z-index: 1; }

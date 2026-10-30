@@ -211,6 +211,11 @@ export interface LineFile {
   file: string;
   /** Nazwa bez rozszerzenia. */
   name: string;
+  /**
+   * Czy linię może prowadzić gracz: w pliku to znacznik [userallowed] (u Ciebie obecny, bez wartości).
+   * „Tylko dla AI” = brak tego znacznika. To wniosek z nazwy znacznika — nie znalazłem jego opisu.
+   */
+  userAllowed: boolean;
   tours: LineTour[];
 }
 

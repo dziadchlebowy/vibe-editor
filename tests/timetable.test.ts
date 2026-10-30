@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { DAY_BITS, hasDay, parseDayMask, setDay } from '../src/shared/dayTypes.ts';
 import { applyTrip, formatDep, loadTimetable, parseClock, parseLine, parseTrip, saveLine, saveTrip, serializeLine } from '../src/main/core/timetable.ts';
 
 const NL = '\r\n';
@@ -110,4 +111,27 @@ test('dysk: skan folderu mapy, zapis zachowuje kodowanie, ścieżki spoza mapy s
   assert.equal(saveTrip(dir, { ...data.trips[0], file: 'TTData/inny.txt' }).ok, false);
   data.lines[0].tours[0].trips[0].trip = '';
   assert.equal(saveLine(dir, data.lines[0]).ok, false);
+});
+
+test('dni brygady: 287 = pon–pt + „poza feriami”, przełączanie bitów', () => {
+  const m = parseDayMask('287');
+  assert.equal(m, 287);
+  const on = DAY_BITS.filter((d) => hasDay(m!, d.bit)).map((d) => d.label);
+  assert.deepEqual(on, ['Pn', 'Wt', 'Śr', 'Cz', 'Pt', 'Poza feriami']);
+  assert.equal(setDay(287, 5, true), 287 + 32);
+  assert.equal(setDay(287, 0, false), 286);
+  assert.equal(parseDayMask('abc'), null);
+  assert.equal(parseDayMask('5000'), null);
+  assert.equal(parseDayMask(undefined), null);
+});
+
+test('.ttl: [userallowed] — odczyt, wyłączenie („tylko dla AI”) i ponowne włączenie przywracają plik', () => {
+  const p = parseLine(TTL);
+  assert.equal(p.userAllowed, true);
+  const off = serializeLine(p, p.tours, false).join(NL);
+  assert.ok(!off.includes('[userallowed]'));
+  assert.equal(parseLine(off).userAllowed, false);
+  assert.equal(off.split(NL).length, TTL.split(NL).length - 2);
+  const back = parseLine(off);
+  assert.equal(serializeLine(back, back.tours, true).join(NL), TTL);
 });

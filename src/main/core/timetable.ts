@@ -27,10 +27,10 @@ function detectEol(text: string): string {
  * [newtour] / numer / typ pojazdu / … / pusta / ---- / pusta / kursy:
  * „  Dep.: h:m:s” (komentarz wyliczany z czasu), [addtrip] / nazwa kursu / 0 / czas startu w minutach / pusta.
  */
-export function parseLine(text: string): { preamble: string[]; tours: LineTour[]; tail: string[] } {
+export function parseLine(text: string): { preamble: string[]; tours: LineTour[]; tail: string[]; userAllowed: boolean } {
   const lines = splitLines(text);
   let i = lines.findIndex((l) => l.trim().toLowerCase() === '[newtour]');
-  if (i < 0) return { preamble: lines, tours: [], tail: [] };
+  if (i < 0) return { preamble: lines, tours: [], tail: [], userAllowed: hasUserAllowed(lines) };
   const preamble = lines.slice(0, i);
   const tours: LineTour[] = [];
   let tail: string[] = [];
@@ -65,11 +65,31 @@ export function parseLine(text: string): { preamble: string[]; tours: LineTour[]
   }
   // plik kończący się znakiem nowej linii: split daje na końcu pusty element — zachowujemy go
   if (tail.length === 0 && lines[lines.length - 1] === '') tail = [''];
-  return { preamble, tours, tail };
+  return { preamble, tours, tail, userAllowed: hasUserAllowed(preamble) };
 }
 
-export function serializeLine(src: { preamble: string[]; tail: string[] }, tours: LineTour[]): string[] {
-  const out = [...src.preamble];
+export const hasUserAllowed = (lines: string[]): boolean => lines.some((l) => l.trim().toLowerCase() === '[userallowed]');
+
+/** Dodaje albo usuwa znacznik [userallowed] (wraz z jedną pustą linijką pod nim); bez zmian, gdy już jest jak trzeba. */
+export function withUserAllowed(preamble: string[], on: boolean): string[] {
+  const i = preamble.findIndex((l) => l.trim().toLowerCase() === '[userallowed]');
+  if (on === (i >= 0)) return preamble;
+  const out = [...preamble];
+  if (!on) {
+    out.splice(i, out[i + 1]?.trim() === '' ? 2 : 1);
+    return out;
+  }
+  const at = out.findIndex((l) => l.trim().toLowerCase() === '[priority]');
+  out.splice(at >= 0 ? at : out.length, 0, '[userallowed]', '');
+  return out;
+}
+
+export function serializeLine(
+  src: { preamble: string[]; tail: string[] },
+  tours: LineTour[],
+  userAllowed?: boolean,
+): string[] {
+  const out = userAllowed === undefined ? [...src.preamble] : withUserAllowed(src.preamble, userAllowed);
   tours.forEach((tour, k) => {
     if (k > 0) out.push(SEP, '');
     out.push('[newtour]', tour.number, ...tour.header, '', SEP, '');
@@ -211,7 +231,8 @@ export function loadTimetable(mapDir: string): TimetableData {
     try {
       const text = decodeCfg(fs.readFileSync(full)).text;
       if (/\.ttl$/i.test(rel)) {
-        data.lines.push({ file: rel, name: path.basename(rel).replace(/\.ttl$/i, ''), tours: parseLine(text).tours });
+        const parsed = parseLine(text);
+        data.lines.push({ file: rel, name: path.basename(rel).replace(/\.ttl$/i, ''), userAllowed: parsed.userAllowed, tours: parsed.tours });
       } else {
         data.trips.push(parseTrip(text, rel));
       }
@@ -247,7 +268,7 @@ export function saveLine(mapDir: string, line: LineFile): { ok: boolean; error?:
   }
   rewrite(full, (text) => {
     const src = parseLine(text);
-    return serializeLine(src, line.tours);
+    return serializeLine(src, line.tours, line.userAllowed);
   });
   return { ok: true };
 }
