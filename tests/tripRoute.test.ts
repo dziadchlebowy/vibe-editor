@@ -236,3 +236,17 @@ test('zapis trasy z przystankami: .ttp dostaje nowy przystanek z cum/len z odcin
   assert.equal(saveTripRoute(map, 'TTData/T.ttp', segs, { remap: [], add: [{ stopId: '1', tileFile: 'a.map', name: 'Zły', entry: 9, pos: 0 }] }).ok, false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+import { splineTrackIndexes } from '../src/main/core/tripRoute.ts';
+
+test('numer elementu na kaflu: pozycja wśród splinów ze ścieżkami pojazdów (chodniki i spline bez ścieżek się nie liczą)', () => {
+  const mk = (path: string, id: string) => ({ path, id, x: 0, y: 0, z: 0, heading: 0, length: 10, radius: 0, mirror: false });
+  const splines = [mk('a/chodnik.sli', '1'), mk('a/ulica.sli', '2'), mk('a/krawezник.sli', '3'), mk('a/ulica.sli', '4'), mk('a/pieszy.sli', '5'), mk('a/tor.sli', '6')];
+  const sli: Record<string, string> = {
+    'a/ulica.sli': ['[path]', '0', '0', '0', '2.5', '0'].join(NL),
+    'a/tor.sli': ['[path]', '2', '0', '0', '1.4', '0'].join(NL),
+    'a/pieszy.sli': ['[path]', '1', '0', '0', '1', '0'].join(NL), // tylko piesi
+    'a/chodnik.sli': '[profilepnt]\n0\n0',
+  };
+  assert.deepEqual(splineTrackIndexes(splines, (r) => sli[r] ?? null), [-1, 0, -1, 1, -1, 2]);
+});

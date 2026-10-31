@@ -297,7 +297,7 @@ export interface RouteSegment {
   pathIndex: number;
   /** Indeks kafla w kolejności [map] z global.cfg. */
   tile: number;
-  /** Numer elementu na kaflu (4. linijka wpisu). */
+  /** Numer elementu na kaflu (4. linijka wpisu): pozycja wśród splinów (obiektów) kafla mających ścieżki — patrz splineTrackIndexes. */
   index: number;
   /** Długość ścieżki w metrach. */
   length: number;
@@ -353,6 +353,8 @@ export interface TripRoute {
   unresolved: number;
   /** Wpisy, w których „numer elementu na kaflu” różni się od pozycji elementu w pliku kafla. */
   indexMismatch: number;
+  /** Sprawdzian numeru elementu na kaflu osobno dla splinów i obiektów: ile wpisów sprawdzono i w ilu numer się nie zgadza. */
+  indexCheck: { splines: { total: number; bad: number }; objects: { total: number; bad: number } };
   /** Przystanki kursu, których nie znaleziono na mapie. */
   missingStops: string[];
   /** Kurs nie ma jeszcze pliku .ttr (zostanie utworzony przy zapisie). */

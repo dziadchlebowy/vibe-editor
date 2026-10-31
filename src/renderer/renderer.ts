@@ -826,7 +826,8 @@ function routeSummary(): string {
   if (r.noFile) parts.push('brak pliku .ttr (powstanie przy zapisie)');
   const bad = routeSegs.filter((g) => g.line.length === 0).length;
   if (bad) parts.push(`nieznalezionych odcinków: ${bad} (przeskanuj mapę lub sprawdź .ttr)`);
-  if (r.indexMismatch) parts.push(`numer elementu na kaflu różni się w ${r.indexMismatch} wpisach`);
+  const ic = r.indexCheck;
+  if (ic.splines.bad || ic.objects.bad) parts.push(`⚠ numer elementu na kaflu niezgodny: spliny ${ic.splines.bad}/${ic.splines.total}, obiekty ${ic.objects.bad}/${ic.objects.total}`);
   if (r.missingStops.length) parts.push(`brak przystanków: ${r.missingStops.join(', ')}`);
   const c = r.stationCheck;
   if (c.total > 0) parts.push(c.ok === c.total ? `przypisanie przystanków do odcinków zgodne (${c.ok}/${c.total})` : `⚠ przypisanie przystanków zgodne tylko w ${c.ok}/${c.total}`);

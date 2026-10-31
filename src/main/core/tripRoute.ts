@@ -156,6 +156,38 @@ export function splinePath(sp: RawSpline, sliText: string | null, pathIndex: num
   return { pts: info?.reversed ? pts.reverse() : pts, length: Math.max(0, sp.length * (1 - c * k)) };
 }
 
+/** Czy plik .sli ma choć jedną ścieżkę dla pojazdów (typ 0 drogowe albo 2 szynowe). Brak pliku = nie. */
+export const sliHasVehiclePath = (text: string | null): boolean => text !== null && pathBlocks(text).some((v) => v.length >= 5 && (v[0] === 0 || v[0] === 2));
+
+/**
+ * „Numer elementu na kaflu” z .ttr (potwierdzony na kaflu z mapy Warszawa 2008): dla splinu to jego pozycja wśród
+ * splinów kafla (w kolejności pliku, [spline] i [spline_h] razem) mających ścieżkę dla pojazdów; spliny bez takich
+ * ścieżek (chodniki, krawężniki, linie) się nie liczą. Zwraca dla każdego splinu ten numer albo −1, gdy nie ma ścieżek pojazdów.
+ */
+export function splineTrackIndexes(splines: RawSpline[], readAsset: (rel: string) => string | null): number[] {
+  const memo = new Map<string, boolean>();
+  let next = 0;
+  return splines.map((sp) => {
+    let has = memo.get(sp.path);
+    if (has === undefined) memo.set(sp.path, (has = sliHasVehiclePath(readAsset(sp.path))));
+    return has ? next++ : -1;
+  });
+}
+
+/** To samo dla obiektów (założenie wg analogii do splinów, niepotwierdzone): pozycja wśród obiektów mających ścieżki w .sco. */
+export function objectTrackIndexes(objects: RawObject[], readAsset: (rel: string) => string | null): number[] {
+  const memo = new Map<string, boolean>();
+  let next = 0;
+  return objects.map((ob) => {
+    let has = memo.get(ob.path);
+    if (has === undefined) {
+      const t = readAsset(ob.path);
+      memo.set(ob.path, (has = t !== null && pathBlocks(t).some((_, i) => scoPathAt(t, i) !== null)));
+    }
+    return has ? next++ : -1;
+  });
+}
+
 // --- składanie trasy --------------------------------------------------------------------------------
 
 interface TileData {
@@ -183,10 +215,14 @@ export function buildTripRoute(trip: TripFile, entries: TrackEntry[], src: Route
     let data: TileData | null = null;
     const text = ref ? src.readTile(ref.file) : null;
     if (ref && text !== null) {
+      const sps = parseTileSplines(text);
+      const obs = parseTileObjects(text);
+      const si = splineTrackIndexes(sps, src.readAsset);
+      const oi = objectTrackIndexes(obs, src.readAsset);
       data = {
         ref,
-        splines: new Map(parseTileSplines(text).map((v, i) => [v.id, { v, i }])),
-        objects: new Map(parseTileObjects(text).map((v, i) => [v.id, { v, i }])),
+        splines: new Map(sps.map((v, k) => [v.id, { v, i: si[k] }])),
+        objects: new Map(obs.map((v, k) => [v.id, { v, i: oi[k] }])),
       };
     }
     cache.set(idx, data);
@@ -196,6 +232,7 @@ export function buildTripRoute(trip: TripFile, entries: TrackEntry[], src: Route
   const segments: RouteSegment[] = [];
   let unresolved = 0;
   let indexMismatch = 0;
+  const indexCheck = { splines: { total: 0, bad: 0 }, objects: { total: 0, bad: 0 } };
   for (const e of entries) {
     // najpierw kafel wskazany w .ttr; gdyby ID tam nie było, szukamy go w pozostałych kaflach
     let hit = load(e.tile);
@@ -212,12 +249,18 @@ export function buildTripRoute(trip: TripFile, entries: TrackEntry[], src: Route
       const ob = hit.objects.get(e.id);
       if (sp) {
         pts = splinePath(sp.v, src.readAsset(sp.v.path), e.pathIndex).pts;
-        if (hit.ref === src.tiles[e.tile] && sp.i !== e.index) indexMismatch++;
+        if (hit.ref === src.tiles[e.tile]) {
+          indexCheck.splines.total++;
+          if (sp.i !== e.index) (indexMismatch++, indexCheck.splines.bad++);
+        }
       } else if (ob) {
         const sco = src.readAsset(ob.v.path);
         const p = sco !== null ? scoPathAt(sco, e.pathIndex) : null;
         pts = p ? objectPathPoints(p, ob.v.x, ob.v.y, ob.v.rot) : null;
-        if (hit.ref === src.tiles[e.tile] && ob.i !== e.index) indexMismatch++;
+        if (hit.ref === src.tiles[e.tile]) {
+          indexCheck.objects.total++;
+          if (ob.i !== e.index) (indexMismatch++, indexCheck.objects.bad++);
+        }
       }
     }
     if (!hit || !pts) unresolved++;
@@ -259,7 +302,7 @@ export function buildTripRoute(trip: TripFile, entries: TrackEntry[], src: Route
     stations.push({ n: i + 1, id: st.id, name: st.name, entry: st.entry, pos: st.pos, cum: st.cum, len: st.len, ok, posOk, x: pos?.x, y: pos?.y });
   });
 
-  return { trip: trip.name, tripFile: trip.file, segments, stops, stations, stationCheck: check, unresolved, indexMismatch, missingStops };
+  return { trip: trip.name, tripFile: trip.file, segments, stops, stations, stationCheck: check, unresolved, indexMismatch, indexCheck, missingStops };
 }
 
 /** Odległość punktu (jednostki kafli) od najbliższego wierzchołka trasy — wystarcza do wyboru spośród kilku przystanków o tej samej nazwie. */
@@ -297,6 +340,7 @@ export function loadTripRoute(workDir: string, mapDir: string, tripFileRel: stri
     stationCheck: { total: 0, ok: 0, posOk: 0 },
     unresolved: 0,
     indexMismatch: 0,
+    indexCheck: { splines: { total: 0, bad: 0 }, objects: { total: 0, bad: 0 } },
     missingStops: [],
     error,
   });
@@ -439,7 +483,11 @@ function tilePaths(workDir: string, mapDir: string, t: TileRef, tileIdx: number)
   const oy = (t.y - 0.5) * 300;
   const world = (pts: Pt[]): Pt[] => pts.map((p) => [ox + p[0], oy + p[1]]);
   const recs: PathRec[] = [];
-  data.splines.forEach((sp, index) => {
+  const readAsset = (rel: string): string | null => cachedAsset(safeJoin(assets, rel));
+  const spIdx = splineTrackIndexes(data.splines, readAsset);
+  const obIdx = objectTrackIndexes(data.objects, readAsset);
+  data.splines.forEach((sp, k) => {
+    const index = spIdx[k];
     const sli = cachedAsset(safeJoin(assets, sp.path));
     const blocks = sli !== null ? pathBlocks(sli) : [[0, 0, 0, 0, 0]];
     blocks.forEach((v, pathIndex) => {
@@ -448,7 +496,8 @@ function tilePaths(workDir: string, mapDir: string, t: TileRef, tileIdx: number)
       recs.push({ id: sp.id, pathIndex, tile: tileIdx, index, length: g.length, pts: world(g.pts) });
     });
   });
-  data.objects.forEach((ob, index) => {
+  data.objects.forEach((ob, k) => {
+    const index = obIdx[k];
     const sco = cachedAsset(safeJoin(assets, ob.path));
     if (sco === null) return;
     pathBlocks(sco).forEach((_, pathIndex) => {
