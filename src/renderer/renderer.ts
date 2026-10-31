@@ -1,4 +1,5 @@
 import { projectOnLine } from '../shared/geo.ts';
+import { routeBases } from '../shared/routeBases.ts';
 import { pinToTile } from '../shared/taskExtras.ts';
 import { TASK_TYPES, getTaskType } from '../shared/taskTypes.ts';
 import type {
@@ -772,14 +773,16 @@ interface PendingStop {
   x: number;
   y: number;
   seg: RouteSegment;
-  pos: number;
+  /** Odległość wzdłuż ścieżki odcinka (m) i boczne przesunięcie od niej (m, w prawo +). */
+  along: number;
+  lateral: number;
 }
 /** Wiersz drugiej listy: przystanek kursu (z .ttp) albo dodany w edytorze. */
 interface StationRow {
   n: number;
   name: string;
   seg: RouteSegment | null;
-  pos: number;
+  along: number;
   pending: PendingStop | null;
   x?: number;
   y?: number;
@@ -830,7 +833,7 @@ function routeSummary(): string {
   if (ic.splines.bad || ic.objects.bad) parts.push(`⚠ numer elementu na kaflu niezgodny: spliny ${ic.splines.bad}/${ic.splines.total}, obiekty ${ic.objects.bad}/${ic.objects.total}`);
   if (r.missingStops.length) parts.push(`brak przystanków: ${r.missingStops.join(', ')}`);
   const c = r.stationCheck;
-  if (c.total > 0) parts.push(c.ok === c.total ? `przypisanie przystanków do odcinków zgodne (${c.ok}/${c.total})` : `⚠ przypisanie przystanków zgodne tylko w ${c.ok}/${c.total}`);
+  if (c.total > 0) parts.push(c.ok === c.total ? `przypisanie przystanków do odcinków zgodne (${c.ok}/${c.total}, wzdłuż ${c.posOk}, bokiem ${c.latOk})` : `⚠ przypisanie przystanków zgodne tylko w ${c.ok}/${c.total}`);
   if (routeDirty) parts.push('NIEZAPISANE ZMIANY');
   return parts.join(' · ');
 }
@@ -844,14 +847,14 @@ function stationRows(): StationRow[] {
     return i >= 0 ? i : fallback;
   };
   type Keyed = StationRow & { key: readonly [number, number] };
-  const rows: Keyed[] = r.stations.map((st, i) => ({ n: 0, name: st.name, seg: stationSegs[i] ?? null, pos: st.pos, pending: null, x: st.x, y: st.y, key: [segIdx(stationSegs[i] ?? null, st.entry), st.pos] as const }));
-  for (const p of [...pendingStops].sort((x, y) => routeSegs.indexOf(x.seg) - routeSegs.indexOf(y.seg) || x.pos - y.pos)) {
-    const key = [routeSegs.indexOf(p.seg), p.pos] as const;
+  const rows: Keyed[] = r.stations.map((st, i) => ({ n: 0, name: st.name, seg: stationSegs[i] ?? null, along: st.along, pending: null, x: st.x, y: st.y, key: [segIdx(stationSegs[i] ?? null, st.entry), st.along] as const }));
+  for (const p of [...pendingStops].sort((x, y) => routeSegs.indexOf(x.seg) - routeSegs.indexOf(y.seg) || x.along - y.along)) {
+    const key = [routeSegs.indexOf(p.seg), p.along] as const;
     let at = 0;
     rows.forEach((row, i) => {
       if (row.key[0] < key[0] || (row.key[0] === key[0] && row.key[1] <= key[1])) at = i + 1;
     });
-    rows.splice(at, 0, { n: 0, name: p.name, seg: p.seg, pos: p.pos, pending: p, x: p.x, y: p.y, key });
+    rows.splice(at, 0, { n: 0, name: p.name, seg: p.seg, along: p.along, pending: p, x: p.x, y: p.y, key });
   }
   rows.forEach((row, i) => (row.n = i + 1));
   return rows;
@@ -919,8 +922,7 @@ function routeMove(d: -1 | 1): void {
 async function routeSave(): Promise<void> {
   if (!routeBase) return;
   const r = routeBase;
-  const cum: number[] = [];
-  routeSegs.reduce((acc, g, k) => (cum[k] = acc + g.length), 0);
+  const base = routeBases(routeSegs);
   const orphan = r.stations.filter((_, i) => stationSegs[i] && !routeSegs.includes(stationSegs[i]!)).map((st) => st.name);
   const orphanNew = pendingStops.filter((p) => !routeSegs.includes(p.seg)).map((p) => p.name);
   if (orphan.length || orphanNew.length) {
@@ -931,11 +933,11 @@ async function routeSave(): Promise<void> {
     ? r.stations.flatMap((st, i) => {
         const seg = stationSegs[i];
         const entry = seg ? routeSegs.indexOf(seg) : -1;
-        const changed = entry >= 0 && (entry !== st.entry || Math.abs(cum[entry] - st.cum) > 0.001 || Math.abs(routeSegs[entry].length - st.len) > 0.001);
+        const changed = entry >= 0 && (entry !== st.entry || Math.abs(base(entry) + st.along - st.route) > 0.001);
         return changed ? [{ index: i, entry }] : [];
       })
     : [];
-  const add = pendingStops.map((p) => ({ stopId: p.stopId, tileFile: p.tileFile, name: p.name, entry: routeSegs.indexOf(p.seg), pos: p.pos }));
+  const add = pendingStops.map((p) => ({ stopId: p.stopId, tileFile: p.tileFile, name: p.name, entry: routeSegs.indexOf(p.seg), along: p.along, lateral: p.lateral }));
   const res = await ve.saveTripRoute(r.tripFile, routeSegs, { remap, add });
   if (!res.ok) {
     alert(res.error ?? 'Nie udało się zapisać trasy.');
@@ -1001,8 +1003,8 @@ function addPendingStop(stop: GridStop): void {
     }
   }
   if (!seg || seg.line.length < 4) return say('Najpierw dodaj do trasy odcinek, przy którym stoi przystanek (albo zaznacz go na liście).');
-  const pos = Math.min(projectOnLine(seg.line, stop.wx, stop.wy).s, seg.length);
-  pendingStops = [...pendingStops, { stopId: stop.id, tileFile: stop.tileFile, name, x: stop.wx, y: stop.wy, seg, pos }];
+  const pr = projectOnLine(seg.line, stop.wx, stop.wy);
+  pendingStops = [...pendingStops, { stopId: stop.id, tileFile: stop.tileFile, name, x: stop.wx, y: stop.wy, seg, along: Math.min(pr.s, seg.length), lateral: pr.side }];
   routeDirty = true;
   pickingStop = false;
   routeTab = 'stops';
@@ -1088,7 +1090,7 @@ function renderRoutePanel(rows: StationRow[] = stationRows()): void {
           { class: `rt-row${seg >= 0 && seg === routeSel ? ' active' : ''}${row.pending ? ' new' : ''}${seg < 0 ? ' bad' : ''}`, title: row.pending ? 'Nowy przystanek — zapisze się do .ttp' : 'Przystanek kursu (.ttp)', onClick: () => seg >= 0 && selectRouteSeg(seg) },
           h('span', { class: 'rt-n' }, `${row.n}.`),
           h('span', { class: 'rt-id' }, `${row.pending ? '➕ ' : ''}${row.name}`),
-          h('span', { class: 'rt-meta' }, `${segNo(row.seg)} · ${row.pos.toFixed(1)} m`),
+          h('span', { class: 'rt-meta' }, `${segNo(row.seg)} · ${row.along.toFixed(1)} m`),
           del,
         ),
       );
@@ -1127,7 +1129,7 @@ function renderRoutePanel(rows: StationRow[] = stationRows()): void {
           : sc.total === 0
             ? 'Brak przystanków do porównania — położenie nowych przystanków jest niezweryfikowane.'
             : sc.ok === sc.total
-              ? `Przypisanie zgodne z .ttp (${sc.ok}/${sc.total}); położenie na ścieżce zgodne w ${sc.posOk}/${sc.total}.`
+              ? `Przypisanie zgodne z .ttp (${sc.ok}/${sc.total}); odległość wzdłuż ścieżki zgodna w ${sc.posOk}/${sc.total}, boczne przesunięcie w ${sc.latOk}/${sc.total}.`
               : `⚠ Przypisanie zgodne tylko w ${sc.ok}/${sc.total} — dodawanie przystanków wyłączone.`,
     ),
     h(

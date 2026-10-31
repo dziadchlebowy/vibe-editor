@@ -6,6 +6,7 @@ import { assetsDir, parseTiles, safeJoin, type TileRef } from './mapIndex.ts';
 import { loadMapStops, parseTileObjects, type RawObject } from './mapStops.ts';
 import { parseTileSplines, type RawSpline } from './mapSplines.ts';
 import { projectOnLine } from '../../shared/geo.ts';
+import { routeBases } from '../../shared/routeBases.ts';
 import { editStations, findTrackFile, listTrackFiles, parseTrip, type NewStationFields } from './timetable.ts';
 
 /**
@@ -281,10 +282,9 @@ export function buildTripRoute(trip: TripFile, entries: TrackEntry[], src: Route
     }
   }
   const lines = segments.map((g) => g.line);
-  const cum: number[] = [];
-  segments.reduce((acc, g, k) => (cum[k] = acc + g.length), 0);
+  const base = routeBases(segments);
   const stations: RouteStation[] = [];
-  const check = { total: 0, ok: 0, posOk: 0 };
+  const check = { total: 0, ok: 0, posOk: 0, latOk: 0 };
   trip.stations.forEach((st, i) => {
     let pos = byId.get(st.id);
     if (!pos) {
@@ -294,12 +294,16 @@ export function buildTripRoute(trip: TripFile, entries: TrackEntry[], src: Route
     if (pos) stops.push({ n: i + 1, name: st.name, x: pos.x, y: pos.y });
     else missingStops.push(st.name);
     const seg = segments[st.entry];
-    const ok = !!seg && Math.abs(cum[st.entry] - st.cum) <= 0.01 && Math.abs(seg.length - st.len) <= 0.01;
-    const posOk = pos && seg && seg.line.length >= 4 ? Math.abs(projectOnLine(seg.line, pos.x, pos.y).s - st.pos) <= 3 : null;
+    // route − along = suma długości wpisów przed wpisem (entry − 1); tolerancja na zaokrąglenia długości w .ttr rośnie z numerem wpisu
+    const ok = !!seg && Math.abs(st.route - st.along - base(st.entry)) <= 1 + 0.005 * st.entry;
+    const proj = pos && seg && seg.line.length >= 4 ? projectOnLine(seg.line, pos.x, pos.y) : null;
+    const posOk = proj ? Math.abs(proj.s - st.along) <= 3 : null;
+    const latOk = proj ? Math.abs(proj.side - st.lateral) <= 1.5 : null;
     check.total++;
     if (ok) check.ok++;
     if (posOk) check.posOk++;
-    stations.push({ n: i + 1, id: st.id, name: st.name, entry: st.entry, pos: st.pos, cum: st.cum, len: st.len, ok, posOk, x: pos?.x, y: pos?.y });
+    if (latOk) check.latOk++;
+    stations.push({ n: i + 1, id: st.id, name: st.name, entry: st.entry, lateral: st.lateral, route: st.route, along: st.along, ok, posOk, latOk, x: pos?.x, y: pos?.y });
   });
 
   return { trip: trip.name, tripFile: trip.file, segments, stops, stations, stationCheck: check, unresolved, indexMismatch, indexCheck, missingStops };
@@ -337,7 +341,7 @@ export function loadTripRoute(workDir: string, mapDir: string, tripFileRel: stri
     segments: [],
     stops: [],
     stations: [],
-    stationCheck: { total: 0, ok: 0, posOk: 0 },
+    stationCheck: { total: 0, ok: 0, posOk: 0, latOk: 0 },
     unresolved: 0,
     indexMismatch: 0,
     indexCheck: { splines: { total: 0, bad: 0 }, objects: { total: 0, bad: 0 } },
@@ -382,15 +386,14 @@ export function saveTripRoute(mapDir: string, tripFileRel: string, segments: Rou
   if (stations.remap.length > 0 || stations.add.length > 0) {
     const tiles = readTiles(mapDir) ?? [];
     const norm = (f: string): string => f.replace(/\\/g, '/').toLowerCase();
-    const cum: number[] = [];
-    segments.reduce((acc, g, k) => (cum[k] = acc + g.length), 0);
-    const remap = new Map(stations.remap.map((r) => [r.index, { entry: r.entry, cum: cum[r.entry], len: segments[r.entry].length }]));
+    const base = routeBases(segments);
+    const remap = new Map(stations.remap.map((r) => [r.index, { entry: r.entry, route: base(r.entry) + (trip.stations[r.index]?.along ?? 0) }]));
     const adds: NewStationFields[] = [];
     for (const a of stations.add) {
       const tile = tiles.findIndex((t) => norm(t.file) === norm(a.tileFile));
       if (tile < 0) return { ok: false, error: `Nie znaleziono kafla przystanku „${a.name}” w global.cfg.` };
       const prev = [...trip.stations].reverse().find((st) => st.entry <= a.entry);
-      adds.push({ id: a.stopId, entry: a.entry, name: a.name, tile, pos: a.pos, cum: cum[a.entry], len: segments[a.entry].length, wait: prev?.wait ?? 3 });
+      adds.push({ id: a.stopId, entry: a.entry, name: a.name, tile, lateral: a.lateral, route: base(a.entry) + a.along, along: a.along, wait: prev?.wait ?? 3 });
     }
     newTtp = editStations(ttpDec.text, remap, adds).join(ttpDec.text.includes('\r\n') ? '\r\n' : '\n');
   }

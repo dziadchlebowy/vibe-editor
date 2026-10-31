@@ -1,0 +1,102 @@
+-----------------------
+Time Table Trip File
+-----------------------
+
+Created with Omsi Version 2.3.004
+Date: 01.08.2026
+
+[trip]
+211_TP-DWI
+Dabrowka Wislana
+211
+
+.........................
+        Stations
+.........................
+
+[station]
+1546303
+0
+Nowodwory o.
+16
+6.263
+24.901
+24.901
+5.000
+
+[station]
+1546314
+16
+Grzymalitow
+15
+5.129
+395.545
+26.191
+10.000
+
+[station]
+1546316
+26
+Dzierzgonska
+14
+1.581
+830.057
+13.119
+0.000
+
+[station]
+1575382
+76
+Dabrowka Wislana
+6
+0.759
+2425.235
+26.242
+100.000
+
+[station]
+1575595
+76
+Dabrowka Wislana p.
+6
+-6.823
+2415.102
+16.109
+20.000
+
+
+.........................
+        Profiles
+.........................
+
+[profile]
+standard
+5.000
+
+[profile_man_arr_time]
+0
+0.000
+[profile_otherstopping]
+0
+3
+[profile_man_arr_time]
+1
+1.000
+[profile_otherstopping]
+1
+1
+[profile_man_arr_time]
+2
+2.000
+[profile_otherstopping]
+2
+1
+[profile_man_arr_time]
+3
+5.000
+[profile_otherstopping]
+3
+1
+[profile_otherstopping]
+4
+4

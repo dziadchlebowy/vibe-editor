@@ -160,21 +160,21 @@ const TTP2 = [
 ].join('\r\n');
 
 test('editStations: nowy przystanek w kolejności (wpis, pos), numery w profilach przesunięte, remap nadpisuje wpis/cum/len', () => {
-  const out = editStations(TTP2, new Map([[1, { entry: 4, cum: 900, len: 30 }]]), [
-    { id: '777', entry: 1, name: 'Drugi', tile: 0, pos: 2, cum: 100.5, len: 20, wait: 5 },
+  const out = editStations(TTP2, new Map([[1, { entry: 4, route: 900 }]]), [
+    { id: '777', entry: 1, name: 'Drugi', tile: 0, lateral: 1.5, route: 100.5, along: 2, wait: 5 },
   ]).join('\r\n');
   const t = parseTripFile(out, 'T.ttp');
   assert.deepEqual(t.stations.map((s) => [s.name, s.entry]), [['Pierwszy', 0], ['Drugi', 1], ['Trzeci', 4]]);
-  assert.deepEqual([t.stations[1].pos, t.stations[1].cum, t.stations[1].len, t.stations[1].wait], [2, 100.5, 20, 5]);
-  assert.deepEqual([t.stations[2].cum, t.stations[2].len], [900, 30]);
+  assert.deepEqual([t.stations[1].lateral, t.stations[1].route, t.stations[1].along, t.stations[1].wait], [1.5, 100.5, 2, 5]);
+  assert.deepEqual([t.stations[2].route, t.stations[2].along], [900, 27.892]); // remap zmienia entry i route, along zostaje
   // przystanek 1 (dawniej „Trzeci”) jest teraz drugim indeksem 2; zerowy bez zmian
   assert.deepEqual(t.profiles[0].dep, { 2: 2 });
   assert.deepEqual(t.profiles[0].arr, { 0: 0 });
   assert.deepEqual(t.profiles[0].stop, { 2: 3 });
   // dopisanie na końcu i do pustego kursu
-  const last = parseTripFile(editStations(TTP2, new Map(), [{ id: '9', entry: 9, name: 'Ostatni', tile: 0, pos: 1, cum: 1, len: 1, wait: 3 }]).join('\r\n'), 'T.ttp');
+  const last = parseTripFile(editStations(TTP2, new Map(), [{ id: '9', entry: 9, name: 'Ostatni', tile: 0, lateral: 0, route: 1, along: 1, wait: 3 }]).join('\r\n'), 'T.ttp');
   assert.deepEqual(last.stations.map((s) => s.name), ['Pierwszy', 'Trzeci', 'Ostatni']);
-  const empty = parseTripFile(editStations(['[trip]', 'T', 'Cel', '1', ''].join('\r\n'), new Map(), [{ id: '9', entry: 0, name: 'X', tile: 0, pos: 1, cum: 1, len: 1, wait: 3 }]).join('\r\n'), 'T.ttp');
+  const empty = parseTripFile(editStations(['[trip]', 'T', 'Cel', '1', ''].join('\r\n'), new Map(), [{ id: '9', entry: 0, name: 'X', tile: 0, lateral: 0, route: 1, along: 1, wait: 3 }]).join('\r\n'), 'T.ttp');
   assert.equal(empty.stations.length, 1);
 });
 
@@ -217,7 +217,7 @@ test('hoverTrack: łańcuch połączonych ścieżek od zaznaczonego odcinka do �
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('zapis trasy z przystankami: .ttp dostaje nowy przystanek z cum/len z odcinków i kopię .ttp.bak', () => {
+test('zapis trasy z przystankami: .ttp dostaje nowy przystanek z route/along z odcinków i kopię .ttp.bak', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 've-stops-'));
   const map = path.join(dir, 'map');
   fs.mkdirSync(path.join(map, 'TTData'), { recursive: true });
@@ -225,15 +225,16 @@ test('zapis trasy z przystankami: .ttp dostaje nowy przystanek z cum/len z odcin
   fs.writeFileSync(path.join(map, 'TTData', 'T.ttp'), TTP2);
   const seg = (id: string, length: number) => ({ id, pathIndex: 0, tile: 0, index: 0, length, flag: 0, line: [] as number[] });
   const segs = [seg('1', 10), seg('2', 20), seg('3', 30)];
-  const res = saveTripRoute(map, 'TTData/T.ttp', segs, { remap: [], add: [{ stopId: '777', tileFile: 'a.map', name: 'Nowy', entry: 1, pos: 4 }] });
+  const res = saveTripRoute(map, 'TTData/T.ttp', segs, { remap: [], add: [{ stopId: '777', tileFile: 'a.map', name: 'Nowy', entry: 2, along: 4, lateral: -2.5 }] });
   assert.equal(res.ok, true);
   const t = parseTripFile(fs.readFileSync(path.join(map, 'TTData', 'T.ttp'), 'utf8'), 'T.ttp');
   const n = t.stations.find((s) => s.name === 'Nowy')!;
-  assert.deepEqual([n.id, n.entry, n.pos, n.cum, n.len, n.tile], ['777', 1, 4, 30, 20, 0]);
+  // route = suma długości wpisów przed wpisem (entry − 1) = wpis 0: 10 m, plus along 4
+  assert.deepEqual([n.id, n.entry, n.lateral, n.route, n.along, n.tile], ['777', 2, -2.5, 14, 4, 0]);
   assert.equal(t.stations.length, 3);
   assert.equal(fs.readFileSync(path.join(map, 'TTData', 'T.ttp.bak'), 'utf8'), TTP2);
   // przystanek przypisany do nieistniejącego odcinka — odmowa, bez zapisu
-  assert.equal(saveTripRoute(map, 'TTData/T.ttp', segs, { remap: [], add: [{ stopId: '1', tileFile: 'a.map', name: 'Zły', entry: 9, pos: 0 }] }).ok, false);
+  assert.equal(saveTripRoute(map, 'TTData/T.ttp', segs, { remap: [], add: [{ stopId: '1', tileFile: 'a.map', name: 'Zły', entry: 9, along: 0, lateral: 0 }] }).ok, false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -249,4 +250,28 @@ test('numer elementu na kaflu: pozycja wśród splinów ze ścieżkami pojazdów
     'a/chodnik.sli': '[profilepnt]\n0\n0',
   };
   assert.deepEqual(splineTrackIndexes(splines, (r) => sli[r] ?? null), [-1, 0, -1, 1, -1, 2]);
+});
+
+import { decodeCfg } from '../src/main/core/globalCfg.ts';
+
+const fixture = (f: string): string => decodeCfg(fs.readFileSync(path.join(import.meta.dirname, 'fixtures', f))).text;
+
+test('.ttr wskazywany nazwą z [trip], a nie nazwą pliku .ttp', () => {
+  const files = ['x/211-TP-DWI.ttr', 'y/211_TP-DWI.ttr'];
+  // .ttp nazywa się 211-TP-DWI, a [trip] wskazuje 211_TP-DWI
+  assert.equal(findTrackFile(files, 'x/211-TP-DWI.ttp', '211_TP-DWI'), 'y/211_TP-DWI.ttr');
+  assert.equal(findTrackFile(files, 'x/211-TP-DWI.ttp', 'NIE-MA'), 'x/211-TP-DWI.ttr');
+  assert.equal(findTrackFile(['z/211_tp-dwi.TTR'], 'x/inne.ttp', '211_TP-DWI'), 'z/211_tp-dwi.TTR');
+});
+
+test('prawdziwy kurs 211-TP-DWI: route − along = suma długości wpisów przed wpisem (entry − 1) dla 5/5 przystanków', () => {
+  const trip = parseTripFile(fixture('211-TP-DWI.ttp'), 'TTData/211-TP-DWI.ttp');
+  assert.equal(trip.internalName, '211_TP-DWI');
+  assert.deepEqual(trip.stations.map((s) => s.entry), [0, 16, 26, 76, 76]);
+  const entries = parseTtr(fixture('211_TP-DWI.ttr'));
+  assert.equal(entries.length, 91);
+  const route = buildTripRoute(trip, entries, { tiles: [], readTile: () => null, readAsset: () => null, stops: null });
+  assert.equal(route.stationCheck.total, 5);
+  assert.equal(route.stationCheck.ok, 5);
+  assert.deepEqual(route.stations.map((s) => s.ok), [true, true, true, true, true]);
 });

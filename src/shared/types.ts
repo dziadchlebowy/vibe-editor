@@ -250,14 +250,17 @@ export interface TripStation {
   /** Indeks kafla ([map] w global.cfg) z obiektem przystanku — 4. linijka po [station]; -1, gdy nieznany. */
   tile: number;
   /**
-   * Numer wpisu [track_entry] z pliku .ttr, do którego przystanek jest przypisany (2. linijka po [station]).
-   * Hipoteza (sprawdzana na danych — patrz TripRoute.stationCheck): pos = położenie przystanku na ścieżce tego wpisu (m),
-   * cum = suma długości wpisów trasy do końca tego wpisu włącznie, len = długość tego wpisu, wait = ostatnia linijka.
+   * Układ [station] (linijki po znaczniku): ID obiektu przystanku · entry · nazwa · indeks kafla · lateral · route · along · wait.
+   * entry = numer wpisu [track_entry] z .ttr, do którego przystanek jest przypisany (kafel wpisu zgadza się z kaflem przystanku).
+   * route i along: route − along = suma długości wpisów trasy przed wpisem (entry − 1) — zgodne w 5/5 przystanków kursu 211-TP-DWI
+   * (z dokładnością do zaokrągleń długości w .ttr); along to odległość przystanku wzdłuż trasy od początku tego wpisu.
+   * lateral = przypuszczalnie boczne przesunięcie od toru (z znakiem; w próbce 0,8–7 m, dla przystanku po drugiej stronie ujemne),
+   * wait = ostatnia linijka (czas postoju / typ — nieustalone; w próbce 0–100).
    */
   entry: number;
-  pos: number;
-  cum: number;
-  len: number;
+  lateral: number;
+  route: number;
+  along: number;
   wait: number;
 }
 
@@ -312,15 +315,16 @@ export interface RouteStation {
   n: number;
   id: string;
   name: string;
-  /** Numer wpisu trasy, do którego przystanek jest przypisany (od 0), i położenie na jego ścieżce (m). */
+  /** Numer wpisu trasy, do którego przystanek jest przypisany (od 0), i pola lateral/route/along z .ttp (patrz TripStation). */
   entry: number;
-  pos: number;
-  cum: number;
-  len: number;
-  /** cum i len z pliku zgadzają się z długościami odcinków trasy. */
+  lateral: number;
+  route: number;
+  along: number;
+  /** route − along zgadza się z sumą długości wpisów przed wpisem (entry − 1) (tolerancja 1 m na zaokrąglenia w .ttr). */
   ok: boolean;
-  /** Położenie obiektu przystanku na ścieżce odcinka zgadza się z pos (tolerancja 3 m); null, gdy przystanku nie ma na mapie. */
+  /** Położenie obiektu przystanku wzdłuż ścieżki odcinka zgadza się z along (3 m) / boczne przesunięcie zgadza się z lateral (1,5 m); null, gdy przystanku nie ma na mapie. */
   posOk: boolean | null;
+  latOk: boolean | null;
   x?: number;
   y?: number;
 }
@@ -329,8 +333,8 @@ export interface RouteStation {
 export interface StationEdits {
   /** Istniejące przystanki (numer w kursie od 0) z nowym numerem wpisu trasy — długości liczy zapis z odcinków. */
   remap: { index: number; entry: number }[];
-  /** Nowe przystanki: obiekt przystanku (ID + plik kafla), numer wpisu trasy i położenie na jego ścieżce (m). */
-  add: { stopId: string; tileFile: string; name: string; entry: number; pos: number }[];
+  /** Nowe przystanki: obiekt przystanku (ID + plik kafla), numer wpisu trasy, odległość wzdłuż jego ścieżki (m) i boczne przesunięcie od niej (m, w prawo +). */
+  add: { stopId: string; tileFile: string; name: string; entry: number; along: number; lateral: number }[];
 }
 
 /**
@@ -348,7 +352,7 @@ export interface TripRoute {
   /** Wszystkie przystanki kursu z .ttp (także te, których nie ma na mapie) wraz z przypisaniem do odcinków. */
   stations: RouteStation[];
   /** Sprawdzian hipotezy o znaczeniu pól [station]: ile przystanków ma spójne przypisanie do odcinków (cum/len) i położenie (pos). */
-  stationCheck: { total: number; ok: number; posOk: number };
+  stationCheck: { total: number; ok: number; posOk: number; latOk: number };
   /** Wpisy, których nie udało się ułożyć na mapie (zostają w pliku). */
   unresolved: number;
   /** Wpisy, w których „numer elementu na kaflu” różni się od pozycji elementu w pliku kafla. */

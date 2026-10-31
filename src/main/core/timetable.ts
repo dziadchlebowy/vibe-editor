@@ -128,7 +128,7 @@ function scanTrip(text: string, file: string): { lines: string[]; scan: TripScan
       title = (lines[i + 2] ?? '').trim();
       line = (lines[i + 3] ?? '').trim();
     } else if (t === '[station]') {
-      stations.push({ id: (lines[i + 1] ?? '').trim(), index: stations.length, name: (lines[i + 3] ?? '').trim(), tile: Math.round(num(lines[i + 4] ?? '-1')), entry: Math.round(num(lines[i + 2] ?? '0')), pos: num(lines[i + 5]), cum: num(lines[i + 6]), len: num(lines[i + 7]), wait: num(lines[i + 8]) });
+      stations.push({ id: (lines[i + 1] ?? '').trim(), index: stations.length, name: (lines[i + 3] ?? '').trim(), tile: Math.round(num(lines[i + 4] ?? '-1')), entry: Math.round(num(lines[i + 2] ?? '0')), lateral: num(lines[i + 5]), route: num(lines[i + 6]), along: num(lines[i + 7]), wait: num(lines[i + 8]) });
     } else if (t === '[profile]') {
       profiles.push({ name: (lines[i + 1] ?? '').trim(), total: num(lines[i + 2]), arr: {}, dep: {}, stop: {} });
       at.push({ arr: new Map(), dep: new Map(), stop: new Map(), end: lines.length });
@@ -208,34 +208,33 @@ export interface NewStationFields {
   entry: number;
   name: string;
   tile: number;
-  pos: number;
-  cum: number;
-  len: number;
+  lateral: number;
+  route: number;
+  along: number;
   wait: number;
 }
 
 /**
- * Edytuje przystanki w tekście .ttp w miejscu: `remap` nadpisuje wpis trasy, cum i len istniejących przystanków
- * (numer w kursie od 0), `adds` wstawia nowe bloki [station] w kolejności (wpis, pos) i przesuwa o 1 numery przystanków
+ * Edytuje przystanki w tekście .ttp w miejscu: `remap` nadpisuje wpis trasy i route istniejących przystanków
+ * (numer w kursie od 0), `adds` wstawia nowe bloki [station] w kolejności (wpis, along) i przesuwa o 1 numery przystanków
  * w profilach ([profile_man_arr_time], [profile_man_dep_time], [profile_otherstopping]) za miejscem wstawienia.
  */
-export function editStations(text: string, remap: Map<number, { entry: number; cum: number; len: number }>, adds: NewStationFields[]): string[] {
+export function editStations(text: string, remap: Map<number, { entry: number; route: number }>, adds: NewStationFields[]): string[] {
   const lines = splitLines(text);
   const markers = (): number[] => lines.flatMap((l, i) => (l.trim().toLowerCase() === '[station]' ? [i] : []));
   markers().forEach((m, k) => {
     const r = remap.get(k);
     if (!r) return;
     lines[m + 2] = String(r.entry);
-    lines[m + 6] = f3(r.cum);
-    lines[m + 7] = f3(r.len);
+    lines[m + 6] = f3(r.route);
   });
-  for (const a of [...adds].sort((x, y) => x.entry - y.entry || x.pos - y.pos)) {
+  for (const a of [...adds].sort((x, y) => x.entry - y.entry || x.along - y.along)) {
     const ms = markers();
     let k = 0;
     ms.forEach((m) => {
       const e = Math.round(num(lines[m + 2]));
-      const p = num(lines[m + 5]);
-      if (e < a.entry || (e === a.entry && p <= a.pos)) k++;
+      const p = num(lines[m + 7]);
+      if (e < a.entry || (e === a.entry && p <= a.along)) k++;
     });
     // numery przystanków w profilach za miejscem wstawienia rosną o 1
     let inProfile = false;
@@ -247,7 +246,7 @@ export function editStations(text: string, remap: Map<number, { entry: number; c
         if (idx >= k) lines[i + 1] = String(idx + 1);
       }
     }
-    const block = ['[station]', a.id, String(a.entry), a.name, String(a.tile), f3(a.pos), f3(a.cum), f3(a.len), f3(a.wait), ''];
+    const block = ['[station]', a.id, String(a.entry), a.name, String(a.tile), f3(a.lateral), f3(a.route), f3(a.along), f3(a.wait), ''];
     let at: number;
     if (k < ms.length) at = ms[k];
     else if (ms.length > 0) {
@@ -283,20 +282,26 @@ const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 const baseOf = (rel: string): string => path.basename(rel).replace(/\.[^.]+$/, '');
 
 /**
- * Szuka pliku .ttr kursu wśród plików .ttr z folderu mapy (ścieżki względne). Kolejność:
- * ta sama nazwa w tym samym folderze → ta sama nazwa w dowolnym folderze (bez względu na wielkość liter) →
- * nazwa zgodna po pominięciu znaków specjalnych („144-TP-SZL” = „144_TP-SZL”), też wg nazwy wewnętrznej z [trip].
+ * Szuka pliku .ttr kursu wśród plików .ttr z folderu mapy (ścieżki względne). Plik .ttp wskazuje swój .ttr nazwą
+ * w pierwszej linijce po [trip] (nazwy .ttp i .ttr nie muszą być takie same), więc kolejność jest taka:
+ * nazwa z [trip] dokładnie (bez względu na wielkość liter) → ta sama nazwa co .ttp w tym samym folderze → ta sama
+ * nazwa co .ttp w dowolnym folderze → zgodność po pominięciu znaków specjalnych („144-TP-SZL” = „144_TP-SZL”),
+ * najpierw wg nazwy z [trip], potem wg nazwy pliku .ttp.
  */
 export function findTrackFile(ttrFiles: string[], tripRel: string, internalName = ''): string | undefined {
   const name = baseOf(tripRel).toLowerCase();
   const dir = path.posix.dirname(tripRel.replace(/\\/g, '/'));
   const same = (r: string): boolean => baseOf(r).toLowerCase() === name;
   const inDir = (r: string): boolean => path.posix.dirname(r.replace(/\\/g, '/')) === dir;
+  const ref = internalName.trim().toLowerCase();
+  const byRef = (r: string): boolean => ref !== '' && baseOf(r).toLowerCase() === ref;
   return (
+    ttrFiles.find((r) => byRef(r) && inDir(r)) ??
+    ttrFiles.find(byRef) ??
     ttrFiles.find((r) => same(r) && inDir(r)) ??
     ttrFiles.find(same) ??
-    ttrFiles.find((r) => norm(baseOf(r)) === norm(name)) ??
-    (internalName ? ttrFiles.find((r) => norm(baseOf(r)) === norm(internalName)) : undefined)
+    (ref ? ttrFiles.find((r) => norm(baseOf(r)) === norm(ref)) : undefined) ??
+    ttrFiles.find((r) => norm(baseOf(r)) === norm(name))
   );
 }
 
