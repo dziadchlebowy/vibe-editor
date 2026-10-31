@@ -384,6 +384,11 @@ input[type="checkbox"]:disabled, input[type="radio"]:disabled { opacity: .5; }
 .map-info-row .v.bad { color: var(--danger); font-weight: bold; }
 .map-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; text-shadow: 1px 1px #0b2a73; text-align: center; padding: 24px; pointer-events: none; }
 .map-empty[hidden] { display: none; }
+.route-bar { display: flex; flex-direction: column; gap: 2px; }
+.route-bar > .status { padding: 0 6px 2px; white-space: normal; }
+.rt-row.new { background: #eaf8ed; }
+.rt-row.new.active { background: var(--accent); }
+.rt-del { grid-column: 2; justify-self: end; cursor: pointer; }
 .rt-panel { position: absolute; top: 8px; right: 8px; bottom: 30px; width: 290px; display: flex; flex-direction: column; gap: 6px; padding: 6px; background: var(--bg); border: 2px solid; border-color: #fff #716f64 #716f64 #fff; box-shadow: 2px 2px 6px rgba(0,0,0,.35); }
 .rt-panel[hidden] { display: none; }
 .rt-title { font-weight: bold; }

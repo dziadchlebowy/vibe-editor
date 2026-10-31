@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { MapStops, RouteSegment, TripFile, TripRoute } from '../../shared/types.ts';
+import type { MapStops, RouteSegment, RouteStation, StationEdits, TripFile, TripRoute } from '../../shared/types.ts';
 import { decodeCfg, encodeCfg, splitLines } from './globalCfg.ts';
 import { assetsDir, parseTiles, safeJoin, type TileRef } from './mapIndex.ts';
 import { loadMapStops, parseTileObjects, type RawObject } from './mapStops.ts';
 import { parseTileSplines, type RawSpline } from './mapSplines.ts';
-import { findTrackFile, listTrackFiles, parseTrip } from './timetable.ts';
+import { projectOnLine } from '../../shared/geo.ts';
+import { editStations, findTrackFile, listTrackFiles, parseTrip, type NewStationFields } from './timetable.ts';
 
 /**
  * Wpis [track_entry] z pliku .ttr (kolejne linijki po znaczniku):
@@ -13,6 +14,8 @@ import { findTrackFile, listTrackFiles, parseTrip } from './timetable.ts';
  * numer elementu na kaflu · długość (m) · flaga (w próbce zawsze 0).
  */
 export type TrackEntry = Omit<RouteSegment, 'line'>;
+
+export { projectOnLine };
 
 export function parseTtr(text: string): TrackEntry[] {
   const lines = splitLines(text);
@@ -81,6 +84,12 @@ function nthPathValues(text: string, n: number, count: number): number[] | null 
   return null;
 }
 
+/** Przesunięcie boczne (m) i kierunek (1 = jazda od końca splinu do początku) n-tej ścieżki z .sli. */
+export function sliPathInfo(text: string, n: number): { off: number; reversed: boolean } | null {
+  const v = nthPathValues(text, n, 5);
+  return v ? { off: v[1], reversed: v[4] === 1 } : null;
+}
+
 /** Przesunięcie boczne (m) n-tej ścieżki z .sli (X środka ścieżki); null, gdy nie da się odczytać. */
 export const sliPathOffset = (text: string, n: number): number | null => nthPathValues(text, n, 5)?.[1] ?? null;
 
@@ -139,10 +148,12 @@ export function objectPathPoints(p: { x: number; y: number; hdg: number; radius:
 
 /** Ścieżka splinu: punkty (m lokalne kafla) i długość ścieżki; boczne przesunięcie z .sli (0, gdy brak .sli). */
 export function splinePath(sp: RawSpline, sliText: string | null, pathIndex: number): { pts: Pt[]; length: number } {
-  const off = (sliText !== null ? sliPathOffset(sliText, pathIndex) : null) ?? 0;
-  const c = off * (sp.mirror ? -1 : 1);
+  const info = sliText !== null ? sliPathInfo(sliText, pathIndex) : null;
+  const c = (info?.off ?? 0) * (sp.mirror ? -1 : 1);
   const k = sp.radius !== 0 ? 1 / sp.radius : 0;
-  return { pts: arcPoints(sp.x, sp.y, sp.heading, sp.radius, sp.length, c), length: Math.max(0, sp.length * (1 - c * k)) };
+  const pts = arcPoints(sp.x, sp.y, sp.heading, sp.radius, sp.length, c);
+  // ścieżka z kierunkiem 1 biegnie od końca splinu do początku — przebieg w kolejności jazdy
+  return { pts: info?.reversed ? pts.reverse() : pts, length: Math.max(0, sp.length * (1 - c * k)) };
 }
 
 // --- składanie trasy --------------------------------------------------------------------------------
@@ -227,6 +238,10 @@ export function buildTripRoute(trip: TripFile, entries: TrackEntry[], src: Route
     }
   }
   const lines = segments.map((g) => g.line);
+  const cum: number[] = [];
+  segments.reduce((acc, g, k) => (cum[k] = acc + g.length), 0);
+  const stations: RouteStation[] = [];
+  const check = { total: 0, ok: 0, posOk: 0 };
   trip.stations.forEach((st, i) => {
     let pos = byId.get(st.id);
     if (!pos) {
@@ -235,9 +250,16 @@ export function buildTripRoute(trip: TripFile, entries: TrackEntry[], src: Route
     }
     if (pos) stops.push({ n: i + 1, name: st.name, x: pos.x, y: pos.y });
     else missingStops.push(st.name);
+    const seg = segments[st.entry];
+    const ok = !!seg && Math.abs(cum[st.entry] - st.cum) <= 0.01 && Math.abs(seg.length - st.len) <= 0.01;
+    const posOk = pos && seg && seg.line.length >= 4 ? Math.abs(projectOnLine(seg.line, pos.x, pos.y).s - st.pos) <= 3 : null;
+    check.total++;
+    if (ok) check.ok++;
+    if (posOk) check.posOk++;
+    stations.push({ n: i + 1, id: st.id, name: st.name, entry: st.entry, pos: st.pos, cum: st.cum, len: st.len, ok, posOk, x: pos?.x, y: pos?.y });
   });
 
-  return { trip: trip.name, tripFile: trip.file, segments, stops, unresolved, indexMismatch, missingStops };
+  return { trip: trip.name, tripFile: trip.file, segments, stops, stations, stationCheck: check, unresolved, indexMismatch, missingStops };
 }
 
 /** Odległość punktu (jednostki kafli) od najbliższego wierzchołka trasy — wystarcza do wyboru spośród kilku przystanków o tej samej nazwie. */
@@ -271,6 +293,8 @@ export function loadTripRoute(workDir: string, mapDir: string, tripFileRel: stri
     tripFile: tripFileRel,
     segments: [],
     stops: [],
+    stations: [],
+    stationCheck: { total: 0, ok: 0, posOk: 0 },
     unresolved: 0,
     indexMismatch: 0,
     missingStops: [],
@@ -295,17 +319,38 @@ export function loadTripRoute(workDir: string, mapDir: string, tripFileRel: stri
   return route;
 }
 
-/** Zapisuje trasę do .ttr kursu (tworzy plik obok .ttp, jeśli go nie ma). Pierwszy zapis robi kopię .ttr.bak. */
-export function saveTripRoute(mapDir: string, tripFileRel: string, segments: RouteSegment[]): { ok: boolean; error?: string } {
+/** Zapisuje trasę do .ttr kursu (tworzy plik obok .ttp, jeśli go nie ma) i zmiany przystanków do .ttp. Pierwszy zapis robi kopie .bak. */
+export function saveTripRoute(mapDir: string, tripFileRel: string, segments: RouteSegment[], stations: StationEdits = { remap: [], add: [] }): { ok: boolean; error?: string } {
   const ttpFull = /\.ttp$/i.test(tripFileRel) ? safeJoin(mapDir, tripFileRel) : null;
   if (!ttpFull || !fs.existsSync(ttpFull)) return { ok: false, error: 'Nie ma takiego kursu w folderze mapy.' };
   const bad = segments.find(
     (g) => !/^\d+$/.test(g.id) || ![g.pathIndex, g.tile, g.index].every((v) => Number.isInteger(v) && v >= 0) || !Number.isFinite(g.length) || g.length < 0 || !Number.isInteger(g.flag),
   );
   if (bad) return { ok: false, error: `Nieprawidłowy wpis trasy (ID ${bad.id}).` };
+  const badStation = [...stations.remap.map((r) => r.entry), ...stations.add.map((a) => a.entry)].find((e) => !Number.isInteger(e) || e < 0 || e >= segments.length);
+  if (badStation !== undefined) return { ok: false, error: `Przystanek przypisany do nieistniejącego odcinka (${badStation}).` };
 
   const ttpDec = decodeCfg(fs.readFileSync(ttpFull));
   const trip = parseTrip(ttpDec.text, tripFileRel);
+
+  // przygotuj zmiany .ttp przed zapisem czegokolwiek, żeby błąd nie zostawił połowicznego stanu
+  let newTtp: string | null = null;
+  if (stations.remap.length > 0 || stations.add.length > 0) {
+    const tiles = readTiles(mapDir) ?? [];
+    const norm = (f: string): string => f.replace(/\\/g, '/').toLowerCase();
+    const cum: number[] = [];
+    segments.reduce((acc, g, k) => (cum[k] = acc + g.length), 0);
+    const remap = new Map(stations.remap.map((r) => [r.index, { entry: r.entry, cum: cum[r.entry], len: segments[r.entry].length }]));
+    const adds: NewStationFields[] = [];
+    for (const a of stations.add) {
+      const tile = tiles.findIndex((t) => norm(t.file) === norm(a.tileFile));
+      if (tile < 0) return { ok: false, error: `Nie znaleziono kafla przystanku „${a.name}” w global.cfg.` };
+      const prev = [...trip.stations].reverse().find((st) => st.entry <= a.entry);
+      adds.push({ id: a.stopId, entry: a.entry, name: a.name, tile, pos: a.pos, cum: cum[a.entry], len: segments[a.entry].length, wait: prev?.wait ?? 3 });
+    }
+    newTtp = editStations(ttpDec.text, remap, adds).join(ttpDec.text.includes('\r\n') ? '\r\n' : '\n');
+  }
+
   const ttrRel = findTrackFile(listTrackFiles(mapDir), tripFileRel, trip.internalName);
   const full = (ttrRel ? safeJoin(mapDir, ttrRel) : null) ?? ttpFull.replace(/\.ttp$/i, '.ttr');
   const exists = fs.existsSync(full);
@@ -316,10 +361,15 @@ export function saveTripRoute(mapDir: string, tripFileRel: string, segments: Rou
   const date = `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
   const text = serializeTtr(dec?.text ?? null, segments, eol, date);
   fs.writeFileSync(full, encodeCfg(text, dec?.encoding ?? ttpDec.encoding, dec?.bom ?? ttpDec.bom));
+
+  if (newTtp !== null) {
+    if (!fs.existsSync(`${ttpFull}.bak`)) fs.copyFileSync(ttpFull, `${ttpFull}.bak`);
+    fs.writeFileSync(ttpFull, encodeCfg(newTtp, ttpDec.encoding, ttpDec.bom));
+  }
   return { ok: true };
 }
 
-// --- wybieranie ścieżki myszą (edytor tras) -----------------------------------------------------------
+// --- wybieranie ścieżek myszą i łańcuchy połączonych ścieżek (edytor tras) ---------------------------------
 
 interface TileCache {
   mtime: number;
@@ -357,6 +407,75 @@ function cachedAsset(full: string | null): string | null {
   }
 }
 
+/** Ścieżka ruchu w metrach świata ((kafel − 0,5) · 300 + lokalne), w kolejności jazdy. */
+interface PathRec {
+  id: string;
+  pathIndex: number;
+  tile: number;
+  index: number;
+  length: number;
+  pts: Pt[];
+}
+interface TilePaths {
+  mtime: number;
+  recs: PathRec[];
+  /** Początki ścieżek w komórkach 4 × 4 m — do szukania następników. */
+  starts: Map<string, PathRec[]>;
+}
+const CELL = 4;
+const cellKey = (x: number, y: number): string => `${Math.floor(x / CELL)},${Math.floor(y / CELL)}`;
+const pathCache = new Map<string, TilePaths>();
+
+/** Wszystkie ścieżki ruchu kafla: pojazdy drogowe i szynowe ze splinów oraz wszystkie ścieżki obiektów. */
+function tilePaths(workDir: string, mapDir: string, t: TileRef, tileIdx: number): TilePaths | null {
+  const full = path.join(mapDir, t.file);
+  const data = cachedTile(full);
+  if (!data) return null;
+  const key = `${full}|${tileIdx}`;
+  const hit = pathCache.get(key);
+  if (hit && hit.mtime === tileCache.get(full)?.mtime) return hit;
+  const assets = assetsDir(workDir);
+  const ox = (t.x - 0.5) * 300;
+  const oy = (t.y - 0.5) * 300;
+  const world = (pts: Pt[]): Pt[] => pts.map((p) => [ox + p[0], oy + p[1]]);
+  const recs: PathRec[] = [];
+  data.splines.forEach((sp, index) => {
+    const sli = cachedAsset(safeJoin(assets, sp.path));
+    const blocks = sli !== null ? pathBlocks(sli) : [[0, 0, 0, 0, 0]];
+    blocks.forEach((v, pathIndex) => {
+      if (v.length < 5 || (v[0] !== 0 && v[0] !== 2)) return; // tylko pojazdy drogowe i szynowe
+      const g = splinePath(sp, sli, pathIndex);
+      recs.push({ id: sp.id, pathIndex, tile: tileIdx, index, length: g.length, pts: world(g.pts) });
+    });
+  });
+  data.objects.forEach((ob, index) => {
+    const sco = cachedAsset(safeJoin(assets, ob.path));
+    if (sco === null) return;
+    pathBlocks(sco).forEach((_, pathIndex) => {
+      const p = scoPathAt(sco, pathIndex);
+      if (p) recs.push({ id: ob.id, pathIndex, tile: tileIdx, index, length: p.len, pts: world(objectPathPoints(p, ob.x, ob.y, ob.rot)) });
+    });
+  });
+  const starts = new Map<string, PathRec[]>();
+  for (const r of recs) {
+    const k = cellKey(r.pts[0][0], r.pts[0][1]);
+    starts.set(k, [...(starts.get(k) ?? []), r]);
+  }
+  const fresh = { mtime: data.mtime, recs, starts };
+  pathCache.set(key, fresh);
+  return fresh;
+}
+
+const toSegment = (r: PathRec): RouteSegment => ({
+  id: r.id,
+  pathIndex: r.pathIndex,
+  tile: r.tile,
+  index: r.index,
+  length: r.length,
+  flag: 0,
+  line: r.pts.flatMap((p) => [p[0] / 300, p[1] / 300]),
+});
+
 /** Odległość punktu od łamanej (m). */
 function distToPolyline(px: number, py: number, pts: Pt[]): number {
   let best = Infinity;
@@ -372,53 +491,111 @@ function distToPolyline(px: number, py: number, pts: Pt[]): number {
   return best;
 }
 
+/** Kafle (indeksy w global.cfg) w sąsiedztwie 3 × 3 punktu w metrach świata. */
+function tilesAround(tiles: TileRef[], byXY: Map<string, number>, px: number, py: number): number[] {
+  const tx = Math.floor(px / 300 + 0.5);
+  const ty = Math.floor(py / 300 + 0.5);
+  void tiles;
+  const out: number[] = [];
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      const i = byXY.get(`${tx + dx},${ty + dy}`);
+      if (i !== undefined) out.push(i);
+    }
+  }
+  return out;
+}
+
+const heading = (a: Pt, b: Pt): number => Math.atan2(b[0] - a[0], b[1] - a[1]);
+const angleDiff = (a: number, b: number): number => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
+const startHeading = (r: PathRec): number => heading(r.pts[0], r.pts[Math.min(1, r.pts.length - 1)]);
+const endHeading = (r: { pts: Pt[] }): number => heading(r.pts[Math.max(0, r.pts.length - 2)], r.pts[r.pts.length - 1]);
+
 /**
- * Najbliższa ścieżka ruchu (pojazdy drogowe i szynowe ze splinów, wszystkie ścieżki obiektów) wokół punktu
- * (x, y) w jednostkach kafli, nie dalej niż maxDistM metrów. Przeszukuje kafel pod punktem i 8 sąsiednich.
+ * Ścieżka ruchu (pojazdy drogowe i szynowe ze splinów, ścieżki obiektów) najbliższa punktu (x, y) w jednostkach kafli,
+ * nie dalej niż maxDistM metrów; przeszukuje kafel pod punktem i 8 sąsiednich.
  */
 export function pickTrackPath(workDir: string, mapDir: string, x: number, y: number, maxDistM: number): RouteSegment | null {
-  const tiles = readTiles(mapDir);
+  return toSegmentOrNull(nearestPath(workDir, mapDir, readTiles(mapDir), x, y, maxDistM));
+}
+
+const toSegmentOrNull = (r: PathRec | null): RouteSegment | null => (r ? toSegment(r) : null);
+
+function nearestPath(workDir: string, mapDir: string, tiles: TileRef[] | null, x: number, y: number, maxDistM: number): PathRec | null {
   if (!tiles) return null;
+  const byXY = new Map(tiles.map((t, i) => [`${t.x},${t.y}`, i]));
   const cx = x * 300;
   const cy = y * 300;
-  const tx = Math.round(x);
-  const ty = Math.round(y);
-  const assets = assetsDir(workDir);
-  let best: { d: number; seg: RouteSegment } | null = null;
-  const consider = (d: number, seg: RouteSegment): void => {
-    if (d <= maxDistM && (!best || d < best.d)) best = { d, seg };
+  let best: { d: number; r: PathRec } | null = null;
+  for (const ti of tilesAround(tiles, byXY, cx, cy)) {
+    for (const r of tilePaths(workDir, mapDir, tiles[ti], ti)?.recs ?? []) {
+      if (Math.hypot(r.pts[0][0] - cx, r.pts[0][1] - cy) > r.length + maxDistM + 2) continue;
+      const d = distToPolyline(cx, cy, r.pts);
+      if (d <= maxDistM && (!best || d < best.d)) best = { d, r };
+    }
+  }
+  return (best as { r: PathRec } | null)?.r ?? null;
+}
+
+/**
+ * Hover w edytorze: ścieżka pod kursorem (target) oraz — jeśli podano przebieg odcinka wyjściowego (fromLine) — najkrótszy
+ * łańcuch połączonych ścieżek od jego końca do target włącznie (puste, gdy target nie jest połączony ze ścieżką wyjściową).
+ * Ścieżki łączą się, gdy początek następnej leży w ≤ 2,5 m od końca poprzedniej, a kierunki różnią się o ≤ 50°.
+ */
+export function hoverTrack(workDir: string, mapDir: string, x: number, y: number, maxDistM: number, fromLine: number[] | null): { target: RouteSegment | null; chain: RouteSegment[] } {
+  const tiles = readTiles(mapDir);
+  const target = nearestPath(workDir, mapDir, tiles, x, y, maxDistM);
+  if (!target || !tiles || !fromLine || fromLine.length < 4) return { target: toSegmentOrNull(target), chain: [] };
+  const byXY = new Map(tiles.map((t, i) => [`${t.x},${t.y}`, i]));
+  const rk = (r: PathRec): string => `${r.id}:${r.pathIndex}`;
+  const successors = (end: Pt, hdg: number): PathRec[] => {
+    const out: PathRec[] = [];
+    for (const ti of tilesAround(tiles, byXY, end[0], end[1])) {
+      const cells = tilePaths(workDir, mapDir, tiles[ti], ti)?.starts;
+      if (!cells) continue;
+      for (let ox = -1; ox <= 1; ox++) {
+        for (let oy = -1; oy <= 1; oy++) {
+          for (const r of cells.get(`${Math.floor(end[0] / CELL) + ox},${Math.floor(end[1] / CELL) + oy}`) ?? []) {
+            if (Math.hypot(r.pts[0][0] - end[0], r.pts[0][1] - end[1]) <= 2.5 && angleDiff(startHeading(r), hdg) <= (50 * Math.PI) / 180) out.push(r);
+          }
+        }
+      }
+    }
+    return out;
   };
-  tiles.forEach((t, tileIdx) => {
-    if (Math.abs(t.x - tx) > 1 || Math.abs(t.y - ty) > 1) return;
-    const data = cachedTile(path.join(mapDir, t.file));
-    if (!data) return;
-    const ox = (t.x - 0.5) * 300;
-    const oy = (t.y - 0.5) * 300;
-    const toLine = (pts: Pt[]): number[] => pts.flatMap((p) => toWorld(t, p));
-    const world = (pts: Pt[]): Pt[] => pts.map((p) => [ox + p[0], oy + p[1]]);
-    data.splines.forEach((sp, i) => {
-      if (Math.hypot(ox + sp.x - cx, oy + sp.y - cy) > sp.length + maxDistM + 25) return;
-      const sli = cachedAsset(safeJoin(assets, sp.path));
-      const paths = sli !== null ? pathBlocks(sli) : [[0, 0, 0, 0, 0]];
-      paths.forEach((v, pathIndex) => {
-        if (v.length < 5 || (v[0] !== 0 && v[0] !== 2)) return; // tylko pojazdy drogowe i szynowe
-        const g = splinePath(sp, sli, pathIndex);
-        const d = distToPolyline(cx, cy, world(g.pts));
-        if (d <= maxDistM) consider(d, { id: sp.id, pathIndex, tile: tileIdx, index: i, length: g.length, flag: 0, line: toLine(g.pts) });
-      });
-    });
-    data.objects.forEach((ob, i) => {
-      if (Math.hypot(ox + ob.x - cx, oy + ob.y - cy) > 150 + maxDistM) return;
-      const sco = cachedAsset(safeJoin(assets, ob.path));
-      if (sco === null) return;
-      pathBlocks(sco).forEach((v, pathIndex) => {
-        const p = scoPathAt(sco, pathIndex);
-        if (!p) return;
-        const pts = objectPathPoints(p, ob.x, ob.y, ob.rot);
-        const d = distToPolyline(cx, cy, world(pts));
-        if (d <= maxDistM) consider(d, { id: ob.id, pathIndex, tile: tileIdx, index: i, length: p.len, flag: 0, line: toLine(pts) });
-      });
-    });
-  });
-  return (best as { seg: RouteSegment } | null)?.seg ?? null;
+  const fromPts: Pt[] = [];
+  for (let i = 0; i + 1 < fromLine.length; i += 2) fromPts.push([fromLine[i] * 300, fromLine[i + 1] * 300]);
+  const goal = rk(target);
+  const dist = new Map<string, number>();
+  const prev = new Map<string, PathRec | null>();
+  const recOf = new Map<string, PathRec>();
+  const open: string[] = [];
+  const relax = (r: PathRec, d: number, from: PathRec | null): void => {
+    const k = rk(r);
+    if (d < (dist.get(k) ?? Infinity)) {
+      dist.set(k, d);
+      prev.set(k, from);
+      recOf.set(k, r);
+      if (!open.includes(k)) open.push(k);
+    }
+  };
+  for (const r of successors(fromPts[fromPts.length - 1], endHeading({ pts: fromPts }))) relax(r, r.length, null);
+  const done = new Set<string>();
+  const maxM = 3000;
+  while (open.length > 0 && done.size < 1500) {
+    open.sort((a, b) => (dist.get(a) ?? 0) - (dist.get(b) ?? 0));
+    const k = open.shift()!;
+    if (done.has(k)) continue;
+    done.add(k);
+    const r = recOf.get(k)!;
+    if (k === goal) {
+      const chain: PathRec[] = [];
+      for (let c: PathRec | null | undefined = r; c; c = prev.get(rk(c))) chain.unshift(c);
+      return { target: toSegment(target), chain: chain.map(toSegment) };
+    }
+    const d = dist.get(k) ?? 0;
+    if (d > maxM) continue;
+    for (const n of successors(r.pts[r.pts.length - 1], endHeading(r))) relax(n, d + n.length, r);
+  }
+  return { target: toSegment(target), chain: [] };
 }

@@ -147,3 +147,92 @@ test('edytor: pickTrackPath wybiera ścieżkę pod kursorem, saveTripRoute zapis
   assert.equal(saveTripRoute(map, 'TTData/T.ttp', [{ ...seg, id: 'x1' }]).ok, false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+import { editStations, parseTrip as parseTripFile } from '../src/main/core/timetable.ts';
+import { hoverTrack, splinePath } from '../src/main/core/tripRoute.ts';
+
+const TTP2 = [
+  '-----------------------', 'Time Table Trip File', '-----------------------', '', '[trip]', 'T', 'Cel', '1', '',
+  '[station]', '1575273', '0', 'Pierwszy', '0', '6.369', '34.503', '34.503', '5.000', '',
+  '[station]', '1546328', '3', 'Trzeci', '0', '0.762', '802.058', '27.892', '3.000', '', '',
+  '[profile]', 'standard', '27.000', '',
+  '[profile_man_arr_time]', '0', '0.000', '[profile_man_dep_time]', '1', '2.000', '[profile_otherstopping]', '1', '3', '',
+].join('\r\n');
+
+test('editStations: nowy przystanek w kolejności (wpis, pos), numery w profilach przesunięte, remap nadpisuje wpis/cum/len', () => {
+  const out = editStations(TTP2, new Map([[1, { entry: 4, cum: 900, len: 30 }]]), [
+    { id: '777', entry: 1, name: 'Drugi', tile: 0, pos: 2, cum: 100.5, len: 20, wait: 5 },
+  ]).join('\r\n');
+  const t = parseTripFile(out, 'T.ttp');
+  assert.deepEqual(t.stations.map((s) => [s.name, s.entry]), [['Pierwszy', 0], ['Drugi', 1], ['Trzeci', 4]]);
+  assert.deepEqual([t.stations[1].pos, t.stations[1].cum, t.stations[1].len, t.stations[1].wait], [2, 100.5, 20, 5]);
+  assert.deepEqual([t.stations[2].cum, t.stations[2].len], [900, 30]);
+  // przystanek 1 (dawniej „Trzeci”) jest teraz drugim indeksem 2; zerowy bez zmian
+  assert.deepEqual(t.profiles[0].dep, { 2: 2 });
+  assert.deepEqual(t.profiles[0].arr, { 0: 0 });
+  assert.deepEqual(t.profiles[0].stop, { 2: 3 });
+  // dopisanie na końcu i do pustego kursu
+  const last = parseTripFile(editStations(TTP2, new Map(), [{ id: '9', entry: 9, name: 'Ostatni', tile: 0, pos: 1, cum: 1, len: 1, wait: 3 }]).join('\r\n'), 'T.ttp');
+  assert.deepEqual(last.stations.map((s) => s.name), ['Pierwszy', 'Trzeci', 'Ostatni']);
+  const empty = parseTripFile(editStations(['[trip]', 'T', 'Cel', '1', ''].join('\r\n'), new Map(), [{ id: '9', entry: 0, name: 'X', tile: 0, pos: 1, cum: 1, len: 1, wait: 3 }]).join('\r\n'), 'T.ttp');
+  assert.equal(empty.stations.length, 1);
+});
+
+const sp = (id: number, y: number): string => rec('spline', 'Splines\\a.sli', [id, 0, 0, 150, 0, y, 0, 100, 0]);
+const TILE_CHAIN = [sp(101, 0), sp(102, 100), sp(103, 200), sp(104, 300), sp(105, 500) /* luka 100 m — niepołączony */].join(NL);
+
+test('splinePath: ścieżka z kierunkiem 1 biegnie od końca splinu do początku', () => {
+  const s = { path: 'a.sli', id: '1', x: 10, y: 20, z: 0, heading: 0, length: 50, radius: 0, mirror: false };
+  const sli = ['[path]', '0', '0', '0', '2.5', '0', '[path]', '0', '0', '0', '2.5', '1'].join(NL);
+  assert.deepEqual(splinePath(s, sli, 0).pts.map((p) => p[1]), [20, 70]);
+  assert.deepEqual(splinePath(s, sli, 1).pts.map((p) => p[1]), [70, 20]);
+});
+
+test('hoverTrack: łańcuch połączonych ścieżek od zaznaczonego odcinka do ścieżki pod kursorem', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 've-hover-'));
+  const map = path.join(dir, 'map');
+  fs.mkdirSync(map, { recursive: true });
+  fs.mkdirSync(path.join(dir, '_vibe', 'assets', 'Splines'), { recursive: true });
+  fs.writeFileSync(path.join(map, 'global.cfg'), ['[map]', '3', '4', 'a.map', ''].join(NL));
+  fs.writeFileSync(path.join(map, 'a.map'), TILE_CHAIN);
+  fs.writeFileSync(path.join(dir, '_vibe', 'assets', 'Splines', 'a.sli'), ['[path]', '0', '0', '0', '2.5', '0'].join(NL));
+  const u = (m: number): number => m / 300;
+  const fromLine = [u(900), u(1050), u(900), u(1150)]; // odcinek 101: od (900, 1050) do (900, 1150) m
+  // kursor nad 103 (y = 1050 + 250 m): łańcuch 102 → 103
+  const r = hoverTrack(dir, map, u(900), u(1050 + 250), 5, fromLine);
+  assert.equal(r.target?.id, '103');
+  assert.deepEqual(r.chain.map((g) => g.id), ['102', '103']);
+  // kursor nad 102: sam następnik
+  assert.deepEqual(hoverTrack(dir, map, u(900), u(1050 + 150), 5, fromLine).chain.map((g) => g.id), ['102']);
+  // kursor nad 104 (zaczyna się w końcu 103): łańcuch 102 → 103 → 104
+  assert.deepEqual(hoverTrack(dir, map, u(900), u(1050 + 350), 5, fromLine).chain.map((g) => g.id), ['102', '103', '104']);
+  // 105 leży za luką 100 m: jest targetem, ale bez łańcucha
+  const gap = hoverTrack(dir, map, u(900), u(1050 + 550), 5, fromLine);
+  assert.equal(gap.target?.id, '105');
+  assert.equal(gap.chain.length, 0);
+  // bez odcinka wyjściowego: tylko target, bez łańcucha
+  const alone = hoverTrack(dir, map, u(900), u(1050 + 250), 5, null);
+  assert.equal(alone.target?.id, '103');
+  assert.equal(alone.chain.length, 0);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('zapis trasy z przystankami: .ttp dostaje nowy przystanek z cum/len z odcinków i kopię .ttp.bak', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 've-stops-'));
+  const map = path.join(dir, 'map');
+  fs.mkdirSync(path.join(map, 'TTData'), { recursive: true });
+  fs.writeFileSync(path.join(map, 'global.cfg'), ['[map]', '3', '4', 'a.map', ''].join(NL));
+  fs.writeFileSync(path.join(map, 'TTData', 'T.ttp'), TTP2);
+  const seg = (id: string, length: number) => ({ id, pathIndex: 0, tile: 0, index: 0, length, flag: 0, line: [] as number[] });
+  const segs = [seg('1', 10), seg('2', 20), seg('3', 30)];
+  const res = saveTripRoute(map, 'TTData/T.ttp', segs, { remap: [], add: [{ stopId: '777', tileFile: 'a.map', name: 'Nowy', entry: 1, pos: 4 }] });
+  assert.equal(res.ok, true);
+  const t = parseTripFile(fs.readFileSync(path.join(map, 'TTData', 'T.ttp'), 'utf8'), 'T.ttp');
+  const n = t.stations.find((s) => s.name === 'Nowy')!;
+  assert.deepEqual([n.id, n.entry, n.pos, n.cum, n.len, n.tile], ['777', 1, 4, 30, 20, 0]);
+  assert.equal(t.stations.length, 3);
+  assert.equal(fs.readFileSync(path.join(map, 'TTData', 'T.ttp.bak'), 'utf8'), TTP2);
+  // przystanek przypisany do nieistniejącego odcinka — odmowa, bez zapisu
+  assert.equal(saveTripRoute(map, 'TTData/T.ttp', segs, { remap: [], add: [{ stopId: '1', tileFile: 'a.map', name: 'Zły', entry: 9, pos: 0 }] }).ok, false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

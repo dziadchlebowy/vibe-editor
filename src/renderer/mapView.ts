@@ -1,5 +1,5 @@
 import { toParams } from '../shared/busStop.ts';
-import type { MapObjPaths, MapOverview, MapSplines, MapStops, MapTileView, TaskPin, TileCoord, TripRoute } from '../shared/types.ts';
+import type { MapObjPaths, MapOverview, MapSplines, MapStops, MapTileView, RouteSegment, TaskPin, TileCoord, TripRoute } from '../shared/types.ts';
 import { clear, h } from './dom.ts';
 
 /**
@@ -34,13 +34,18 @@ export interface GridOptions {
    * Klik w trybie edycji trasy: segment = indeks klikniętego odcinka trasy (null, gdy kliknięto puste miejsce),
    * x/y = punkt w jednostkach kafli, maxDistM = promień „trafienia” w metrach przy bieżącym zbliżeniu.
    */
-  onRouteClick?: (c: { segment: number | null; x: number; y: number; maxDistM: number }) => void;
+  onRouteClick?: (c: { segment: number | null; stop: GridStop | null; x: number; y: number; maxDistM: number }) => void;
+  /** Ruch kursora w trybie edycji trasy (null = kursor opuścił mapę); overSegment = kursor nad odcinkiem trasy. */
+  onRouteHover?: (c: { x: number; y: number; maxDistM: number; overSegment: boolean } | null) => void;
 }
 
 export interface GridStop {
   tileFile: string;
   id: string;
   p: string[];
+  /** Pozycja obiektu przystanku w jednostkach kafli. */
+  wx?: number;
+  wy?: number;
 }
 
 const key = (x: number, y: number): string => `${x},${y}`;
@@ -66,6 +71,7 @@ export class MapGrid {
   private route: TripRoute | null = null;
   private routeEditing = false;
   private routeSelected: number | null = null;
+  private routeHover: RouteSegment[] = [];
   private tip: HTMLElement;
   private selectedTile: MapTileView | null = null;
   private selectedPin: GridPin | null = null;
@@ -96,7 +102,10 @@ export class MapGrid {
     this.canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     this.canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
     this.canvas.addEventListener('pointermove', (e) => this.onHover(e));
-    this.canvas.addEventListener('pointerleave', () => (this.tip.hidden = true));
+    this.canvas.addEventListener('pointerleave', () => {
+      this.tip.hidden = true;
+      if (this.routeEditing) this.opts.onRouteHover?.(null);
+    });
     this.refresh();
   }
 
@@ -184,6 +193,12 @@ export class MapGrid {
     this.refresh();
   }
 
+  /** Ścieżki podświetlone pod kursorem (jedna albo cały łańcuch od zaznaczonego odcinka); pusta tablica gasi podświetlenie. */
+  setRouteHover(segs: RouteSegment[]): void {
+    this.routeHover = segs;
+    this.draw();
+  }
+
   /** Zaznaczony odcinek trasy (indeks w route.segments) — rysowany wyróżnionym kolorem z oznaczonym początkiem i końcem. */
   setRouteSelected(i: number | null): void {
     this.routeSelected = i;
@@ -242,7 +257,7 @@ export class MapGrid {
         const d = Math.hypot(px - (left + s.x * mPx), py - (top + (300 - s.y) * mPx));
         if (d <= 9 && (!best || d < best.d)) {
           const p = toParams(s.p);
-          best = { d, stop: { tileFile: t.file, id: s.id, p: s.p }, name: p.name || '(bez nazwy)', sub: p.subName };
+          best = { d, stop: { tileFile: t.file, id: s.id, p: s.p, wx: t.x - 0.5 + s.x / 300, wy: t.y - 0.5 + s.y / 300 }, name: p.name || '(bez nazwy)', sub: p.subName };
         }
       }
     }
@@ -250,6 +265,15 @@ export class MapGrid {
   }
 
   private onHover(e: PointerEvent): void {
+    if (this.routeEditing) {
+      if (e.buttons !== 0) return;
+      const r = this.canvas.getBoundingClientRect();
+      const px = e.clientX - r.left;
+      const py = e.clientY - r.top;
+      const w = this.worldAt(px, py);
+      this.opts.onRouteHover?.({ x: w.x, y: w.y, maxDistM: (10 * 300) / this.scale, overSegment: this.segmentAt(px, py) !== null });
+      return;
+    }
     if (e.buttons !== 0 || !this.layers.stops) {
       if (!this.layers.stops) this.tip.hidden = true;
       return;
@@ -339,6 +363,13 @@ export class MapGrid {
         trace(g.line);
       });
     }
+    if (this.routeHover.length > 0) {
+      for (const pass of [0, 1]) {
+        ctx.strokeStyle = pass === 0 ? '#ffffff' : '#a21cd0';
+        ctx.lineWidth = pass === 0 ? 8 : 4.5;
+        for (const g of this.routeHover) trace(g.line);
+      }
+    }
     if (this.routeEditing) {
       // strzałki kierunku jazdy w środku każdego odcinka; początek i koniec zaznaczonego odcinka
       r.segments.forEach((g, k) => {
@@ -388,7 +419,7 @@ export class MapGrid {
       if (x < -20 || y < -20 || x > w + 20 || y > hh + 20) continue;
       ctx.beginPath();
       ctx.arc(x, y, rad, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffd400';
+      ctx.fillStyle = s.pending ? '#7bd88f' : '#ffd400';
       ctx.fill();
       ctx.lineWidth = 2;
       ctx.strokeStyle = '#1b1b1b';
@@ -599,7 +630,7 @@ export class MapGrid {
   private click(px: number, py: number): void {
     if (this.routeEditing) {
       const w = this.worldAt(px, py);
-      this.opts.onRouteClick?.({ segment: this.segmentAt(px, py), x: w.x, y: w.y, maxDistM: (10 * 300) / this.scale });
+      this.opts.onRouteClick?.({ segment: this.segmentAt(px, py), stop: this.stopAt(px, py)?.stop ?? null, x: w.x, y: w.y, maxDistM: (10 * 300) / this.scale });
       return;
     }
     const mode = this.opts.mode;

@@ -16,6 +16,7 @@ import type {
   TimetableData,
   TripFile,
   RouteSegment,
+  StationEdits,
   TripRoute,
 } from './types.ts';
 
@@ -60,10 +61,13 @@ export interface VeApi {
   saveTrip(trip: TripFile): Promise<OkResult>;
   /** Trasa kursu z pliku .ttr leżącego obok .ttp (plik kursu względem folderu mapy). */
   getTripRoute(tripFile: string): Promise<TripRoute>;
-  /** Najbliższa ścieżka ruchu (spline lub obiekt) wokół punktu (jednostki kafli), maks. maxDistM metrów; null, gdy żadnej nie ma. */
-  pickTrack(x: number, y: number, maxDistM: number): Promise<RouteSegment | null>;
-  /** Zapisuje trasę kursu do pliku .ttr (tworzy go, jeśli go nie ma; pierwszy zapis robi kopię .ttr.bak). */
-  saveTripRoute(tripFile: string, segments: RouteSegment[]): Promise<OkResult>;
+  /**
+   * Ścieżka ruchu (spline lub obiekt) pod punktem (jednostki kafli, maks. maxDistM metrów) oraz — gdy podano fromLine
+   * (przebieg odcinka, od którego jedziemy) — najkrótszy łańcuch połączonych ścieżek od jego końca do tej ścieżki włącznie.
+   */
+  hoverTrack(x: number, y: number, maxDistM: number, fromLine: number[] | null): Promise<{ target: RouteSegment | null; chain: RouteSegment[] }>;
+  /** Zapisuje trasę kursu do pliku .ttr (tworzy go, jeśli go nie ma; pierwszy zapis robi kopię .ttr.bak) i zmiany przystanków do .ttp (kopia .ttp.bak). */
+  saveTripRoute(tripFile: string, segments: RouteSegment[], stations: StationEdits): Promise<OkResult>;
 
   /** Okno bez natywnej ramki (motyw XP): własne przyciski minimalizuj / maksymalizuj / zamknij. */
   windowControl(action: 'minimize' | 'maximize' | 'close'): Promise<void>;

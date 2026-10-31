@@ -8,6 +8,7 @@ import type {
   LineFile,
   OkResult,
   RouteSegment,
+  StationEdits,
   RunState,
   SaveRequest,
   Settings,
@@ -22,7 +23,7 @@ import { applyFailed, clearFailed, writeLastRun } from './core/failed.ts';
 import { GitRunner, setupRepo, syncToRemote } from './core/git.ts';
 import { assetsDir, buildMapIndex, loadMapIndex, toCatalog, toOverview } from './core/mapIndex.ts';
 import { loadTimetable, saveLine, saveTrip } from './core/timetable.ts';
-import { loadTripRoute, pickTrackPath, saveTripRoute } from './core/tripRoute.ts';
+import { hoverTrack, loadTripRoute, saveTripRoute } from './core/tripRoute.ts';
 import { loadMapSplines } from './core/mapSplines.ts';
 import { loadObjPaths } from './core/mapObjPaths.ts';
 import { loadMapStops, saveStopParams, updateStopsCache } from './core/mapStops.ts';
@@ -402,15 +403,15 @@ function registerIpc(): void {
     if (!d || !settings.workDir) return { trip: '', lines: [], stops: [], entries: 0, unresolved: 0, missingStops: [], error: 'Brak skonfigurowanej mapy.' };
     return loadTripRoute(settings.workDir, d, tripFile);
   });
-  ipcMain.handle('tt:pick', (_e, x: number, y: number, maxDistM: number) => {
+  ipcMain.handle('tt:hover', (_e, x: number, y: number, maxDistM: number, fromLine: number[] | null) => {
     const d = mapDir();
-    if (!d || !settings.workDir || ![x, y, maxDistM].every(Number.isFinite)) return null;
-    return pickTrackPath(settings.workDir, d, x, y, maxDistM);
+    if (!d || !settings.workDir || ![x, y, maxDistM].every(Number.isFinite)) return { target: null, chain: [] };
+    return hoverTrack(settings.workDir, d, x, y, maxDistM, Array.isArray(fromLine) ? fromLine : null);
   });
-  ipcMain.handle('tt:saveRoute', (_e, tripFile: string, segments: RouteSegment[]) => {
+  ipcMain.handle('tt:saveRoute', (_e, tripFile: string, segments: RouteSegment[], stations: StationEdits) => {
     const d = mapDir();
     if (!d || !settings.workDir) return { ok: false, error: 'Brak skonfigurowanej mapy.' };
-    return saveTripRoute(d, tripFile, segments);
+    return saveTripRoute(d, tripFile, segments, stations);
   });
   ipcMain.handle('tt:saveLine', (_e, line: LineFile) => {
     const d = mapDir();

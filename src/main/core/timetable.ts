@@ -128,7 +128,7 @@ function scanTrip(text: string, file: string): { lines: string[]; scan: TripScan
       title = (lines[i + 2] ?? '').trim();
       line = (lines[i + 3] ?? '').trim();
     } else if (t === '[station]') {
-      stations.push({ id: (lines[i + 1] ?? '').trim(), index: stations.length, name: (lines[i + 3] ?? '').trim(), tile: Math.round(num(lines[i + 4] ?? '-1')) });
+      stations.push({ id: (lines[i + 1] ?? '').trim(), index: stations.length, name: (lines[i + 3] ?? '').trim(), tile: Math.round(num(lines[i + 4] ?? '-1')), entry: Math.round(num(lines[i + 2] ?? '0')), pos: num(lines[i + 5]), cum: num(lines[i + 6]), len: num(lines[i + 7]), wait: num(lines[i + 8]) });
     } else if (t === '[profile]') {
       profiles.push({ name: (lines[i + 1] ?? '').trim(), total: num(lines[i + 2]), arr: {}, dep: {}, stop: {} });
       at.push({ arr: new Map(), dep: new Map(), stop: new Map(), end: lines.length });
@@ -200,6 +200,66 @@ export function applyTrip(text: string, edited: TripFile): string[] {
     lines.splice(at, 0, ...ins.lines);
   }
   return lines.filter((l): l is string => l !== null);
+}
+
+/** Pola nowego przystanku w .ttp (kolejność linijek po znaczniku [station]: ID, wpis trasy, nazwa, kafel, pos, cum, len, wait). */
+export interface NewStationFields {
+  id: string;
+  entry: number;
+  name: string;
+  tile: number;
+  pos: number;
+  cum: number;
+  len: number;
+  wait: number;
+}
+
+/**
+ * Edytuje przystanki w tekście .ttp w miejscu: `remap` nadpisuje wpis trasy, cum i len istniejących przystanków
+ * (numer w kursie od 0), `adds` wstawia nowe bloki [station] w kolejności (wpis, pos) i przesuwa o 1 numery przystanków
+ * w profilach ([profile_man_arr_time], [profile_man_dep_time], [profile_otherstopping]) za miejscem wstawienia.
+ */
+export function editStations(text: string, remap: Map<number, { entry: number; cum: number; len: number }>, adds: NewStationFields[]): string[] {
+  const lines = splitLines(text);
+  const markers = (): number[] => lines.flatMap((l, i) => (l.trim().toLowerCase() === '[station]' ? [i] : []));
+  markers().forEach((m, k) => {
+    const r = remap.get(k);
+    if (!r) return;
+    lines[m + 2] = String(r.entry);
+    lines[m + 6] = f3(r.cum);
+    lines[m + 7] = f3(r.len);
+  });
+  for (const a of [...adds].sort((x, y) => x.entry - y.entry || x.pos - y.pos)) {
+    const ms = markers();
+    let k = 0;
+    ms.forEach((m) => {
+      const e = Math.round(num(lines[m + 2]));
+      const p = num(lines[m + 5]);
+      if (e < a.entry || (e === a.entry && p <= a.pos)) k++;
+    });
+    // numery przystanków w profilach za miejscem wstawienia rosną o 1
+    let inProfile = false;
+    for (let i = 0; i < lines.length; i++) {
+      const t = lines[i].trim().toLowerCase();
+      if (t === '[profile]') inProfile = true;
+      else if (inProfile && (t === '[profile_man_arr_time]' || t === '[profile_man_dep_time]' || t === '[profile_otherstopping]')) {
+        const idx = Math.round(num(lines[i + 1]));
+        if (idx >= k) lines[i + 1] = String(idx + 1);
+      }
+    }
+    const block = ['[station]', a.id, String(a.entry), a.name, String(a.tile), f3(a.pos), f3(a.cum), f3(a.len), f3(a.wait), ''];
+    let at: number;
+    if (k < ms.length) at = ms[k];
+    else if (ms.length > 0) {
+      at = ms[ms.length - 1] + 9;
+      if ((lines[at] ?? '').trim() === '') at++;
+    } else {
+      const p = lines.findIndex((l) => l.trim().toLowerCase() === '[profile]');
+      at = p >= 0 ? p : lines.length;
+    }
+    lines.splice(at, 0, ...block);
+  }
+  return lines;
 }
 
 // --- dysk ------------------------------------------------------------------

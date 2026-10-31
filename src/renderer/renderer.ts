@@ -1,3 +1,4 @@
+import { projectOnLine } from '../shared/geo.ts';
 import { pinToTile } from '../shared/taskExtras.ts';
 import { TASK_TYPES, getTaskType } from '../shared/taskTypes.ts';
 import type {
@@ -676,6 +677,7 @@ function setPinMode(on: boolean): void {
 }
 
 const mapLayers = { paths: false, stops: false, splines: true };
+const layerCbs: Partial<Record<keyof typeof mapLayers, HTMLInputElement>> = {};
 
 async function applyMapSettings(): Promise<void> {
   const s = await ve.getSettings();
@@ -685,6 +687,7 @@ async function applyMapSettings(): Promise<void> {
 function layerBox(label: string, title: string, key: keyof typeof mapLayers): HTMLElement {
   const cb = h('input', { type: 'checkbox', checked: mapLayers[key] });
   cb.title = title;
+  layerCbs[key] = cb;
   cb.addEventListener('change', () => {
     mapLayers[key] = cb.checked;
     mapGrid.setLayers(mapLayers);
@@ -761,11 +764,36 @@ function openStopDialog(stop: GridStop): void {
 
 // --- trasy kursów: podgląd i edycja ---------------------------------------
 
+/** Przystanek dodany w edytorze, jeszcze niezapisany do .ttp. */
+interface PendingStop {
+  stopId: string;
+  tileFile: string;
+  name: string;
+  x: number;
+  y: number;
+  seg: RouteSegment;
+  pos: number;
+}
+/** Wiersz drugiej listy: przystanek kursu (z .ttp) albo dodany w edytorze. */
+interface StationRow {
+  n: number;
+  name: string;
+  seg: RouteSegment | null;
+  pos: number;
+  pending: PendingStop | null;
+  x?: number;
+  y?: number;
+}
+
 let routeBase: TripRoute | null = null; // wczytana trasa: przystanki i metadane (odcinki trzyma routeSegs)
 let routeSegs: RouteSegment[] = []; // robocza lista odcinków (kolejność jazdy)
+let stationSegs: (RouteSegment | null)[] = []; // odcinek przypisany do istniejącego przystanku (po numerze w kursie)
+let pendingStops: PendingStop[] = [];
 let routeSel: number | null = null;
 let routeDirty = false;
 let routeEditing = false;
+let routeTab: 'segments' | 'stops' = 'segments';
+let pickingStop = false;
 let routeUndo: RouteSegment[][] = [];
 let routeRedo: RouteSegment[][] = [];
 let routePanel: HTMLElement;
@@ -785,6 +813,12 @@ async function fillRouteSelect(): Promise<void> {
 
 const routeMeters = (): number => routeSegs.reduce((n, g) => n + g.length, 0);
 
+/** Zapis przystanków do .ttp jest dozwolony, gdy przypisanie istniejących przystanków do odcinków potwierdza się na danych. */
+function stationsWritable(): boolean {
+  const c = routeBase?.stationCheck;
+  return !!c && c.ok === c.total;
+}
+
 function routeSummary(): string {
   const r = routeBase;
   if (!r) return '';
@@ -794,18 +828,44 @@ function routeSummary(): string {
   if (bad) parts.push(`nieznalezionych odcinków: ${bad} (przeskanuj mapę lub sprawdź .ttr)`);
   if (r.indexMismatch) parts.push(`numer elementu na kaflu różni się w ${r.indexMismatch} wpisach`);
   if (r.missingStops.length) parts.push(`brak przystanków: ${r.missingStops.join(', ')}`);
+  const c = r.stationCheck;
+  if (c.total > 0) parts.push(c.ok === c.total ? `przypisanie przystanków do odcinków zgodne (${c.ok}/${c.total})` : `⚠ przypisanie przystanków zgodne tylko w ${c.ok}/${c.total}`);
   if (routeDirty) parts.push('NIEZAPISANE ZMIANY');
   return parts.join(' · ');
 }
 
+/** Wiersze drugiej listy: przystanki kursu w kolejności pliku z wstawionymi nowymi według (odcinek, położenie). */
+function stationRows(): StationRow[] {
+  const r = routeBase;
+  if (!r) return [];
+  const segIdx = (g: RouteSegment | null, fallback: number): number => {
+    const i = g ? routeSegs.indexOf(g) : -1;
+    return i >= 0 ? i : fallback;
+  };
+  type Keyed = StationRow & { key: readonly [number, number] };
+  const rows: Keyed[] = r.stations.map((st, i) => ({ n: 0, name: st.name, seg: stationSegs[i] ?? null, pos: st.pos, pending: null, x: st.x, y: st.y, key: [segIdx(stationSegs[i] ?? null, st.entry), st.pos] as const }));
+  for (const p of [...pendingStops].sort((x, y) => routeSegs.indexOf(x.seg) - routeSegs.indexOf(y.seg) || x.pos - y.pos)) {
+    const key = [routeSegs.indexOf(p.seg), p.pos] as const;
+    let at = 0;
+    rows.forEach((row, i) => {
+      if (row.key[0] < key[0] || (row.key[0] === key[0] && row.key[1] <= key[1])) at = i + 1;
+    });
+    rows.splice(at, 0, { n: 0, name: p.name, seg: p.seg, pos: p.pos, pending: p, x: p.x, y: p.y, key });
+  }
+  rows.forEach((row, i) => (row.n = i + 1));
+  return rows;
+}
+
 /** Przerysowuje trasę na mapie, panel edycji i pasek informacji z bieżącego stanu roboczego. */
 function applyRoute(): void {
-  mapGrid.setRoute(routeBase ? { ...routeBase, segments: routeSegs } : null);
+  const rows = stationRows();
+  const markers = rows.flatMap((row) => (row.x !== undefined && row.y !== undefined ? [{ n: row.n, name: row.name, x: row.x, y: row.y, pending: !!row.pending }] : []));
+  mapGrid.setRoute(routeBase ? { ...routeBase, segments: routeSegs, stops: markers } : null);
   mapGrid.setRouteSelected(routeSel);
   routeInfo.textContent = routeSummary();
   routeInfo.className = routeDirty ? 'status warn' : 'status';
   editBtn.disabled = !routeBase;
-  renderRoutePanel();
+  renderRoutePanel(rows);
 }
 
 function routeChange(next: RouteSegment[], sel: number | null): void {
@@ -814,6 +874,7 @@ function routeChange(next: RouteSegment[], sel: number | null): void {
   routeSegs = next;
   routeSel = sel;
   routeDirty = true;
+  mapGrid.setRouteHover([]);
   applyRoute();
 }
 
@@ -833,9 +894,10 @@ function selectRouteSeg(i: number | null, focus = true): void {
   if (focus && i !== null) mapGrid.focusSegment(i);
 }
 
-function routeInsert(seg: RouteSegment): void {
+/** Wstawia odcinki po zaznaczonym (albo na końcu) i zaznacza ostatni z nich. */
+function routeInsertMany(segs: RouteSegment[]): void {
   const pos = routeSel === null ? routeSegs.length : routeSel + 1;
-  routeChange([...routeSegs.slice(0, pos), seg, ...routeSegs.slice(pos)], pos);
+  routeChange([...routeSegs.slice(0, pos), ...segs, ...routeSegs.slice(pos)], pos + segs.length - 1);
 }
 
 function routeDelete(): void {
@@ -855,34 +917,122 @@ function routeMove(d: -1 | 1): void {
 
 async function routeSave(): Promise<void> {
   if (!routeBase) return;
-  const res = await ve.saveTripRoute(routeBase.tripFile, routeSegs);
+  const r = routeBase;
+  const cum: number[] = [];
+  routeSegs.reduce((acc, g, k) => (cum[k] = acc + g.length), 0);
+  const orphan = r.stations.filter((_, i) => stationSegs[i] && !routeSegs.includes(stationSegs[i]!)).map((st) => st.name);
+  const orphanNew = pendingStops.filter((p) => !routeSegs.includes(p.seg)).map((p) => p.name);
+  if (orphan.length || orphanNew.length) {
+    alert(`Przystanki przypisane do usuniętych odcinków: ${[...orphan, ...orphanNew].join(', ')}.\nCofnij usunięcie odcinka (Ctrl+Z) albo usuń nowy przystanek z listy.`);
+    return;
+  }
+  const remap = stationsWritable()
+    ? r.stations.flatMap((st, i) => {
+        const seg = stationSegs[i];
+        const entry = seg ? routeSegs.indexOf(seg) : -1;
+        const changed = entry >= 0 && (entry !== st.entry || Math.abs(cum[entry] - st.cum) > 0.001 || Math.abs(routeSegs[entry].length - st.len) > 0.001);
+        return changed ? [{ index: i, entry }] : [];
+      })
+    : [];
+  const add = pendingStops.map((p) => ({ stopId: p.stopId, tileFile: p.tileFile, name: p.name, entry: routeSegs.indexOf(p.seg), pos: p.pos }));
+  const res = await ve.saveTripRoute(r.tripFile, routeSegs, { remap, add });
   if (!res.ok) {
     alert(res.error ?? 'Nie udało się zapisać trasy.');
     return;
   }
-  routeDirty = false;
   const keepSel = routeSel;
-  await showTripRoute(routeBase.tripFile, false, true);
+  const keepTab = routeTab;
+  await showTripRoute(r.tripFile, false, true);
+  routeTab = keepTab;
   routeSel = keepSel !== null && keepSel < routeSegs.length ? keepSel : null;
   applyRoute();
   void fillRouteSelect();
+  void timetableView?.reload();
 }
 
-/** Klik w trybie edycji: istniejący odcinek zaznacza, puste miejsce dodaje najbliższą ścieżkę ruchu po zaznaczonym. */
-async function onRouteMapClick(c: { segment: number | null; x: number; y: number; maxDistM: number }): Promise<void> {
+/** Odcinek, od którego jedziemy: zaznaczony, a gdy nic nie zaznaczono — ostatni odcinek trasy. */
+function fromLine(): number[] | null {
+  const g = routeSel !== null ? routeSegs[routeSel] : routeSegs[routeSegs.length - 1];
+  return g && g.line.length >= 4 ? g.line : null;
+}
+
+// podświetlanie ścieżek pod kursorem: zapytania do procesu głównego jedno po drugim, liczy się tylko ostatnie położenie
+let hoverBusy = false;
+let hoverLatest: { x: number; y: number; maxDistM: number; overSegment: boolean } | null | undefined;
+function onRouteMapHover(c: { x: number; y: number; maxDistM: number; overSegment: boolean } | null): void {
+  hoverLatest = c;
+  if (!hoverBusy) void runHover();
+}
+async function runHover(): Promise<void> {
+  hoverBusy = true;
+  try {
+    while (hoverLatest !== undefined) {
+      const c = hoverLatest;
+      hoverLatest = undefined;
+      if (!c || c.overSegment || pickingStop || !routeEditing) {
+        mapGrid.setRouteHover([]);
+        continue;
+      }
+      const r = await ve.hoverTrack(c.x, c.y, c.maxDistM, fromLine());
+      mapGrid.setRouteHover(r.chain.length > 0 ? r.chain : r.target ? [r.target] : []);
+    }
+  } finally {
+    hoverBusy = false;
+  }
+}
+
+/** Dodaje przystanek (obiekt z mapy) do kursu, przypisany do zaznaczonego odcinka trasy albo do najbliższego. */
+function addPendingStop(stop: GridStop): void {
+  const say = (t: string): void => {
+    routeInfo.textContent = t;
+    routeInfo.className = 'status warn';
+  };
+  if (!stationsWritable()) return say('Zapis przystanków wyłączony: przypisanie istniejących przystanków do odcinków nie zgadza się z danymi.');
+  const name = toParams(stop.p).name || stop.p[0] || '';
+  if (!name || stop.wx === undefined || stop.wy === undefined) return say('Ten przystanek nie ma nazwy — nadaj ją najpierw w jego parametrach.');
+  if (routeBase?.stations.some((st) => st.id === stop.id) || pendingStops.some((p) => p.stopId === stop.id)) return say(`Przystanek „${name}” jest już w kursie.`);
+  let seg: RouteSegment | undefined = routeSel !== null ? routeSegs[routeSel] : undefined;
+  if (!seg) {
+    let best = Infinity;
+    for (const g of routeSegs) {
+      const d = g.line.length >= 4 ? projectOnLine(g.line, stop.wx, stop.wy).d : Infinity;
+      if (d < best) (best = d, (seg = g));
+    }
+  }
+  if (!seg || seg.line.length < 4) return say('Najpierw dodaj do trasy odcinek, przy którym stoi przystanek (albo zaznacz go na liście).');
+  const pos = Math.min(projectOnLine(seg.line, stop.wx, stop.wy).s, seg.length);
+  pendingStops = [...pendingStops, { stopId: stop.id, tileFile: stop.tileFile, name, x: stop.wx, y: stop.wy, seg, pos }];
+  routeDirty = true;
+  pickingStop = false;
+  routeTab = 'stops';
+  routeSel = routeSegs.indexOf(seg);
+  applyRoute();
+}
+
+/** Klik w trybie edycji: przystanek (w trybie dodawania), istniejący odcinek zaznacza, puste miejsce dodaje ścieżkę (albo cały łańcuch). */
+async function onRouteMapClick(c: { segment: number | null; stop: GridStop | null; x: number; y: number; maxDistM: number }): Promise<void> {
+  if (pickingStop) {
+    if (c.stop) addPendingStop(c.stop);
+    else {
+      routeInfo.textContent = 'Kliknij przystanek (kółko przystanku) na mapie — warstwa „Przystanki” jest włączona.';
+      routeInfo.className = 'status warn';
+    }
+    return;
+  }
   if (c.segment !== null) {
     selectRouteSeg(c.segment, false);
     return;
   }
-  const seg = await ve.pickTrack(c.x, c.y, c.maxDistM);
-  if (!seg) {
-    routeInfo.textContent = 'W tym miejscu nie ma ścieżki ruchu — przybliż mapę i kliknij bliżej drogi (włącz warstwę „Spliny”).';
+  const r = await ve.hoverTrack(c.x, c.y, c.maxDistM, fromLine());
+  const segs = r.chain.length > 0 ? r.chain : r.target ? [r.target] : [];
+  if (segs.length === 0) {
+    routeInfo.textContent = 'W tym miejscu nie ma ścieżki ruchu — przybliż mapę i kliknij bliżej drogi.';
     routeInfo.className = 'status warn';
     return;
   }
-  const same = routeSegs.findIndex((g) => g.id === seg.id && g.pathIndex === seg.pathIndex);
-  if (same >= 0) selectRouteSeg(same, false);
-  else routeInsert(seg);
+  const same = routeSegs.findIndex((g) => g.id === segs[0].id && g.pathIndex === segs[0].pathIndex);
+  if (segs.length === 1 && same >= 0) selectRouteSeg(same, false);
+  else routeInsertMany(segs.filter((g) => !routeSegs.some((e) => e.id === g.id && e.pathIndex === g.pathIndex)));
 }
 
 function routeButton(label: string, title: string, fn: () => void, disabled = false, cls = 'btn'): HTMLElement {
@@ -891,43 +1041,98 @@ function routeButton(label: string, title: string, fn: () => void, disabled = fa
   return b;
 }
 
-function renderRoutePanel(): void {
+function renderRoutePanel(rows: StationRow[] = stationRows()): void {
   if (!routePanel) return;
   const scroll = routePanel.querySelector('.rt-list')?.scrollTop ?? 0;
   clear(routePanel);
   routePanel.hidden = !routeEditing || !routeBase;
   if (routePanel.hidden || !routeBase) return;
   const n = routeSegs.length;
+  const segNo = (g: RouteSegment | null): string => {
+    const i = g ? routeSegs.indexOf(g) : -1;
+    return i >= 0 ? `odc. ${i + 1}` : '⚠ odcinek usunięty';
+  };
   const list = h('div', { class: 'rt-list' });
-  routeSegs.forEach((g, k) => {
-    list.append(
-      h(
-        'button',
-        { class: `rt-row${k === routeSel ? ' active' : ''}${g.line.length === 0 ? ' bad' : ''}`, title: g.line.length === 0 ? 'Nie znaleziono na mapie' : `kafel ${g.tile}, element ${g.index}`, onClick: () => selectRouteSeg(k) },
-        h('span', { class: 'rt-n' }, `${k + 1}.`),
-        h('span', { class: 'rt-id' }, `${g.line.length === 0 ? '⚠ ' : ''}${g.id}`),
-        h('span', { class: 'rt-meta' }, `ścieżka ${g.pathIndex} · ${g.length.toFixed(1)} m`),
-      ),
-    );
-  });
-  if (n === 0) list.append(h('div', { class: 'empty' }, 'Trasa jest pusta. Kliknij na mapie ścieżkę ruchu (jezdnię), aby dodać pierwszy odcinek.'));
+  if (routeTab === 'segments') {
+    routeSegs.forEach((g, k) => {
+      list.append(
+        h(
+          'button',
+          { class: `rt-row${k === routeSel ? ' active' : ''}${g.line.length === 0 ? ' bad' : ''}`, title: g.line.length === 0 ? 'Nie znaleziono na mapie' : `kafel ${g.tile}, element ${g.index}`, onClick: () => selectRouteSeg(k) },
+          h('span', { class: 'rt-n' }, `${k + 1}.`),
+          h('span', { class: 'rt-id' }, `${g.line.length === 0 ? '⚠ ' : ''}${g.id}`),
+          h('span', { class: 'rt-meta' }, `ścieżka ${g.pathIndex} · ${g.length.toFixed(1)} m`),
+        ),
+      );
+    });
+    if (n === 0) list.append(h('div', { class: 'empty' }, 'Trasa jest pusta. Kliknij na mapie ścieżkę ruchu (jezdnię), aby dodać pierwszy odcinek.'));
+  } else {
+    rows.forEach((row) => {
+      const seg = row.seg ? routeSegs.indexOf(row.seg) : -1;
+      const del = row.pending
+        ? h('span', {
+            class: 'rt-del',
+            title: 'Usuń ten nowy przystanek',
+            onClick: (e: Event) => {
+              e.stopPropagation();
+              pendingStops = pendingStops.filter((p) => p !== row.pending);
+              routeDirty = routeDirty || pendingStops.length > 0;
+              applyRoute();
+            },
+          }, '🗑️')
+        : h('span');
+      list.append(
+        h(
+          'button',
+          { class: `rt-row${seg >= 0 && seg === routeSel ? ' active' : ''}${row.pending ? ' new' : ''}${seg < 0 ? ' bad' : ''}`, title: row.pending ? 'Nowy przystanek — zapisze się do .ttp' : 'Przystanek kursu (.ttp)', onClick: () => seg >= 0 && selectRouteSeg(seg) },
+          h('span', { class: 'rt-n' }, `${row.n}.`),
+          h('span', { class: 'rt-id' }, `${row.pending ? '➕ ' : ''}${row.name}`),
+          h('span', { class: 'rt-meta' }, `${segNo(row.seg)} · ${row.pos.toFixed(1)} m`),
+          del,
+        ),
+      );
+    });
+    if (rows.length === 0) list.append(h('div', { class: 'empty' }, 'Kurs nie ma jeszcze przystanków.'));
+  }
+  const tabBtn = (t: 'segments' | 'stops', label: string): HTMLElement =>
+    h('button', { class: `btn${routeTab === t ? ' active' : ''}`, onClick: () => ((routeTab = t), (pickingStop = false), mapGrid.setRouteHover([]), applyRoute()) }, label);
+  const sc = routeBase.stationCheck;
   routePanel.append(
     h('div', { class: 'rt-title' }, `✏️ Edycja trasy: ${routeBase.trip}`),
-    h(
-      'div',
-      { class: 'rt-buttons' },
-      routeButton('↶', 'Cofnij (Ctrl+Z)', () => routeUndoRedo(routeUndo, routeRedo), routeUndo.length === 0),
-      routeButton('↷', 'Ponów (Ctrl+Y)', () => routeUndoRedo(routeRedo, routeUndo), routeRedo.length === 0),
-      routeButton('▲', 'Przesuń zaznaczony odcinek wcześniej', () => routeMove(-1), routeSel === null || routeSel === 0),
-      routeButton('▼', 'Przesuń zaznaczony odcinek później', () => routeMove(1), routeSel === null || routeSel >= n - 1),
-      routeButton('🗑️', 'Usuń zaznaczony odcinek (Delete)', routeDelete, routeSel === null),
-    ),
+    h('div', { class: 'rt-buttons' }, tabBtn('segments', `Odcinki (${n})`), tabBtn('stops', `Przystanki (${rows.length})`)),
+    routeTab === 'segments'
+      ? h(
+          'div',
+          { class: 'rt-buttons' },
+          routeButton('↶', 'Cofnij (Ctrl+Z)', () => routeUndoRedo(routeUndo, routeRedo), routeUndo.length === 0),
+          routeButton('↷', 'Ponów (Ctrl+Y)', () => routeUndoRedo(routeRedo, routeUndo), routeRedo.length === 0),
+          routeButton('▲', 'Przesuń zaznaczony odcinek wcześniej', () => routeMove(-1), routeSel === null || routeSel === 0),
+          routeButton('▼', 'Przesuń zaznaczony odcinek później', () => routeMove(1), routeSel === null || routeSel >= n - 1),
+          routeButton('🗑️', 'Usuń zaznaczony odcinek (Delete)', routeDelete, routeSel === null),
+        )
+      : h(
+          'div',
+          { class: 'rt-buttons' },
+          routeButton(pickingStop ? '✖ Anuluj dodawanie' : '➕ Dodaj przystanek', 'Kliknij przystanek na mapie: zostanie przypisany do zaznaczonego odcinka trasy (a gdy nic nie zaznaczono — do najbliższego)', () => ((pickingStop = !pickingStop), mapGrid.setRouteHover([]), applyRoute()), !stationsWritable() && !pickingStop),
+        ),
     list,
-    h('div', { class: 'rt-foot' }, `${n} odc. · ${Math.round(routeMeters())} m`),
+    h(
+      'div',
+      { class: 'rt-foot' },
+      routeTab === 'segments'
+        ? `${n} odc. · ${Math.round(routeMeters())} m`
+        : pickingStop
+          ? 'Kliknij przystanek na mapie (przypisze się do zaznaczonego odcinka lub najbliższego).'
+          : sc.total === 0
+            ? 'Brak przystanków do porównania — położenie nowych przystanków jest niezweryfikowane.'
+            : sc.ok === sc.total
+              ? `Przypisanie zgodne z .ttp (${sc.ok}/${sc.total}); położenie na ścieżce zgodne w ${sc.posOk}/${sc.total}.`
+              : `⚠ Przypisanie zgodne tylko w ${sc.ok}/${sc.total} — dodawanie przystanków wyłączone.`,
+    ),
     h(
       'div',
       { class: 'rt-buttons' },
-      routeButton('💾 Zapisz .ttr', 'Zapisz trasę do pliku .ttr kursu (Ctrl+S); pierwszy zapis robi kopię .ttr.bak', () => void routeSave(), !routeDirty, 'btn primary'),
+      routeButton('💾 Zapisz', 'Zapisz trasę do .ttr (kopia .ttr.bak) i nowe przystanki do .ttp (kopia .ttp.bak); Ctrl+S', () => void routeSave(), !routeDirty, 'btn primary'),
       routeButton('Zakończ edycję', 'Wyłącz tryb edycji (niezapisane zmiany zostają do zapisu)', () => setRouteEditing(false)),
     ),
   );
@@ -936,12 +1141,27 @@ function renderRoutePanel(): void {
   routePanel.querySelector('.rt-row.active')?.scrollIntoView({ block: 'nearest' });
 }
 
+/** W edycji trasy warstwy Spliny, Ścieżki i Przystanki są włączane automatycznie (żeby było co klikać). */
+function enableEditLayers(): void {
+  for (const k of ['splines', 'paths', 'stops'] as const) {
+    mapLayers[k] = true;
+    const cb = layerCbs[k];
+    if (cb) cb.checked = true;
+  }
+  mapGrid.setLayers(mapLayers);
+}
+
 function setRouteEditing(on: boolean): void {
   routeEditing = on && !!routeBase;
   editBtn.textContent = routeEditing ? '✏️ Edycja trasy: włączona' : '✏️ Edytuj trasę';
   editBtn.classList.toggle('active', routeEditing);
+  if (routeEditing) enableEditLayers();
+  else {
+    pickingStop = false;
+    routeSel = null;
+    mapGrid.setRouteHover([]);
+  }
   mapGrid.setRouteEditing(routeEditing);
-  if (!routeEditing) routeSel = null;
   applyRoute();
 }
 
@@ -955,9 +1175,12 @@ async function showTripRoute(tripFile: string, fit = true, force = false): Promi
   routeUndo = [];
   routeRedo = [];
   routeSel = null;
+  pendingStops = [];
+  pickingStop = false;
   if (!tripFile) {
     routeBase = null;
     routeSegs = [];
+    stationSegs = [];
     routeInfo.textContent = '';
     setRouteEditing(false);
     return;
@@ -967,12 +1190,14 @@ async function showTripRoute(tripFile: string, fit = true, force = false): Promi
   if (route.error) {
     routeBase = null;
     routeSegs = [];
+    stationSegs = [];
     setRouteEditing(false);
     routeInfo.textContent = route.error;
     return;
   }
   routeBase = route;
   routeSegs = route.segments;
+  stationSegs = route.stations.map((st) => route.segments[st.entry] ?? null);
   applyRoute();
   if (fit) requestAnimationFrame(() => mapGrid.fitRoute());
 }
@@ -994,6 +1219,7 @@ function mountMapTab(): void {
     mode: 'info',
     onStopClick: (s) => openStopDialog(s),
     onRouteClick: (c) => void onRouteMapClick(c),
+    onRouteHover: (c) => onRouteMapHover(c),
     onPinPlaced: (p) => {
       // punkt wskazany: wracamy do zwykłego trybu i otwieramy nowe zadanie z tą pinezką
       setPinMode(false);
@@ -1051,7 +1277,7 @@ function mountMapTab(): void {
       h('div', { class: 'spacer' }),
       mapSummary,
     ),
-    h('div', { class: 'toolbar' }, h('span', {}, 'Trasa kursu:'), routeSelect, editBtn, routeInfo),
+    h('div', { class: 'route-bar' }, h('div', { class: 'toolbar' }, h('span', {}, 'Trasa kursu:'), routeSelect, editBtn), routeInfo),
     mapGrid.el,
   );
   updateMapToolbar();

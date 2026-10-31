@@ -249,6 +249,16 @@ export interface TripStation {
   name: string;
   /** Indeks kafla ([map] w global.cfg) z obiektem przystanku — 4. linijka po [station]; -1, gdy nieznany. */
   tile: number;
+  /**
+   * Numer wpisu [track_entry] z pliku .ttr, do którego przystanek jest przypisany (2. linijka po [station]).
+   * Hipoteza (sprawdzana na danych — patrz TripRoute.stationCheck): pos = położenie przystanku na ścieżce tego wpisu (m),
+   * cum = suma długości wpisów trasy do końca tego wpisu włącznie, len = długość tego wpisu, wait = ostatnia linijka.
+   */
+  entry: number;
+  pos: number;
+  cum: number;
+  len: number;
+  wait: number;
 }
 
 /** Profil czasowy kursu; czasy w minutach od startu kursu, klucz = numer przystanku (od 0). */
@@ -297,6 +307,32 @@ export interface RouteSegment {
   line: number[];
 }
 
+export interface RouteStation {
+  /** Numer przystanku w kursie od 1 i jego ID (obiekt przystanku). */
+  n: number;
+  id: string;
+  name: string;
+  /** Numer wpisu trasy, do którego przystanek jest przypisany (od 0), i położenie na jego ścieżce (m). */
+  entry: number;
+  pos: number;
+  cum: number;
+  len: number;
+  /** cum i len z pliku zgadzają się z długościami odcinków trasy. */
+  ok: boolean;
+  /** Położenie obiektu przystanku na ścieżce odcinka zgadza się z pos (tolerancja 3 m); null, gdy przystanku nie ma na mapie. */
+  posOk: boolean | null;
+  x?: number;
+  y?: number;
+}
+
+/** Zmiany przystanków kursu zapisywane razem z trasą (do .ttp). */
+export interface StationEdits {
+  /** Istniejące przystanki (numer w kursie od 0) z nowym numerem wpisu trasy — długości liczy zapis z odcinków. */
+  remap: { index: number; entry: number }[];
+  /** Nowe przystanki: obiekt przystanku (ID + plik kafla), numer wpisu trasy i położenie na jego ścieżce (m). */
+  add: { stopId: string; tileFile: string; name: string; entry: number; pos: number }[];
+}
+
 /**
  * Trasa kursu z pliku .ttr, gotowa do narysowania. Współrzędne w jednostkach kafli
  * (środek kafla (x, y) to dokładnie (x, y), oś Y rośnie na północ) — jak pinezki.
@@ -308,7 +344,11 @@ export interface TripRoute {
   /** Odcinki w kolejności jazdy — po jednym na wpis [track_entry]. */
   segments: RouteSegment[];
   /** Przystanki kursu znalezione na mapie; n = numer przystanku w kursie (od 1). */
-  stops: { n: number; name: string; x: number; y: number }[];
+  stops: { n: number; name: string; x: number; y: number; /** dodany w edytorze, jeszcze niezapisany */ pending?: boolean }[];
+  /** Wszystkie przystanki kursu z .ttp (także te, których nie ma na mapie) wraz z przypisaniem do odcinków. */
+  stations: RouteStation[];
+  /** Sprawdzian hipotezy o znaczeniu pól [station]: ile przystanków ma spójne przypisanie do odcinków (cum/len) i położenie (pos). */
+  stationCheck: { total: number; ok: number; posOk: number };
   /** Wpisy, których nie udało się ułożyć na mapie (zostają w pliku). */
   unresolved: number;
   /** Wpisy, w których „numer elementu na kaflu” różni się od pozycji elementu w pliku kafla. */
