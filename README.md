@@ -51,6 +51,22 @@ Za każdym razem, gdy podłączany jest nowy folder roboczy (zmiana folderu, map
 
 Do promptu dla Claude dopisywana jest krótka notka, że dokładne dane o splinach i obiektach są w `_vibe/assets/` (Claude szuka w nich Globem/Grepem zamiast dostawać je w prompcie).
 
+## Zakładka „Mapa i trasy” — tryby
+
+Pasek u góry przełącza trzy tryby, każdy z własnym paskiem narzędzi (warstwy, „Wycentruj” i „Przeskanuj mapę” są wspólne):
+
+- **🗺️ Przegląd** — warstwy, edycja parametrów przystanków (klik w przystanek), pinezki do zadań.
+- **🚌 Trasy kursów** — trasa z `.ttr` z przystankami, edycja trasy i przystanków (opis niżej).
+- **🔗 Łączenia ścieżek** — tworzenie łączeń między węzłami ścieżek (opis niżej).
+
+## Łączenia ścieżek
+
+Węzeł to koniec splinu z ścieżką dla pojazdów (typ 0 lub 2 w `.sli`). Najechanie kursorem podświetla węzeł, klik wybiera węzeł A, drugi klik węzeł B; panel po prawej pokazuje o każdym: ID splinu, koniec/początek, numer ścieżki, **wysokość** (oś + wysokość ścieżki), nachylenie od podłoża, skew, azymut, przesunięcie od osi, kierunek ruchu i przyłączenie. Jeden węzeł musi leżeć na końcu splinu, drugi na początku (kolejność wskazania jest dowolna). Podgląd (przerywana linia) i „✔ Utwórz łączenie” używają `invis_street.sli` — musi leżeć luzem w `_vibe/assets/Splines` (w OMSI jest zawsze luzem w `Splines`).
+
+Geometria: gdy jeden łuk nie wystarcza, powstają dwa spliny (biarc: dwa łuki styczne do siebie i do obu spliny źródłowych). Wysokość zmienia się płynnie jedną sześcienną krzywą Hermite’a na całej długości (nachylenia na końcach = nachylenia przyłączanych splinów, na styku łuków ciągłe), skew rośnie liniowo od wartości węzła A do węzła B. Wpisy to `[spline_h]` dopisywane do kafla za ostatnim splinem (numery elementów na kaflu istniejących wpisów `.ttr` się nie zmieniają), a wolne końce przyłączanych splinów dostają `prev`/`next` nowych (kopia `.map.bak`). „Odwróć kierunek ścieżki” odbija nowe spliny (`mirror`), co odwraca kierunek ruchu; domyślnie ustawia się je według kierunku ruchu na przyłączonych ścieżkach.
+
+Parametry pionowe `[spline_h]` (linijki 11–18 wpisu) ustalone z kafla Warszawa 2008: nachylenie na początku (°), nachylenie na końcu (°), różnica wysokości (m), skew na początku i na końcu, dwa parametry profilu bocznego i przesunięcie tekstury; zwykły `[spline]` jest płaski. Kierunek ruchu na ścieżce: kierunek 1 w `.sli` oraz odbicie splinu (`mirror`) odwracają go, a oba naraz się znoszą.
+
 ## Trasa kursu (.ttr)
 
 Plik `.ttr` to lista wpisów `[track_entry]`: ID splinu lub obiektu · numer ścieżki ruchu w jego `.sli`/`.sco` · indeks kafla (kolejność `[map]` w `global.cfg`) · numer elementu na kaflu · długość · flaga. VibeEditor czyta potrzebne kafle `.map` na żądanie (bez ponownego skanowania mapy), znajduje spline/obiekt po ID, liczy przebieg wskazanej ścieżki (z kopii `.sli`/`.sco` w `_vibe/assets`) i rysuje go na mapie. Przystanki kursu bierze z `[station]` w `.ttp` (ID obiektu przystanku), a gdy go nie ma w `map-stops.json` — dopasowuje po nazwie. 4. linijka wpisu to pozycja splinu wśród splinów kafla mających ścieżkę dla pojazdów (typ 0 lub 2 w `.sli`; potwierdzone na kaflu Warszawa 2008; dla obiektów to analogiczne założenie, a pasek informacji zlicza rozbieżności osobno dla splinów i obiektów). Założenia nie potwierdzone w grze:, 6. to flaga (zawsze 0 w próbce), oraz to, że rysowany jest cały odcinek ścieżki, a nie tylko `długość` z `.ttr`.

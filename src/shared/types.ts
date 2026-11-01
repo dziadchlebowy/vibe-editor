@@ -365,3 +365,55 @@ export interface TripRoute {
   noFile?: boolean;
   error?: string;
 }
+
+/** Wskazanie węzła ścieżki: koniec (początek albo koniec) splinu i numer ścieżki ruchu w jego .sli. */
+export interface LinkNodeRef {
+  splineId: string;
+  pathIndex: number;
+  end: 'start' | 'end';
+  /** Indeks kafla splinu w kolejności [map] z global.cfg. */
+  tile: number;
+}
+
+/** Węzeł ścieżki: punkt, w którym ścieżka ruchu kończy się na końcu splinu — do niego można dołączyć łączenie. */
+export interface LinkNode extends LinkNodeRef {
+  /** Punkt ścieżki i punkt osi splinu w tym końcu (jednostki kafli, jak pinezki). */
+  x: number;
+  y: number;
+  ax: number;
+  ay: number;
+  /** Azymut splinu (° od północy) w tym końcu, w kierunku splinu. */
+  heading: number;
+  /** Wysokość punktu ścieżki (m): wysokość splinu w tym końcu + wysokość ścieżki nad nawierzchnią. */
+  height: number;
+  axisHeight: number;
+  pathHeight: number;
+  /** Nachylenie od podłoża (°) i skew w tym końcu splinu. */
+  pitch: number;
+  skew: number;
+  /** Przesunięcie boczne ścieżki od osi splinu (m, z uwzględnieniem mirror; w prawo +). */
+  lateral: number;
+  /** Czy pojazdy na tej ścieżce opuszczają spline w tym końcu (false = wjeżdżają w spline). */
+  exits: boolean;
+  /** ID splinu przyłączonego do tego końca; '0' = koniec wolny. */
+  linked: string;
+  kind: 'spline' | 'spline_h';
+  sli: string;
+  tileFile: string;
+}
+
+/** Plan łączenia dwóch węzłów jednym lub dwoma splinami (biarc) z gładką zmianą wysokości i skew. */
+export interface LinkPlan {
+  /** Węzeł na końcu splinu (tu zaczyna się łączenie) i węzeł na początku splinu (tu się kończy). */
+  from: LinkNode | null;
+  to: LinkNode | null;
+  /** Przebiegi nowych splinów (płaskie [x0, y0, …] w jednostkach kafli); po jednym na spline. */
+  preview: number[][];
+  length: number;
+  dz: number;
+  splines: { length: number; radius: number; pitch0: number; pitch1: number; dz: number; skew0: number; skew1: number }[];
+  /** Podpowiedź dla „odwróć ścieżkę”: kierunek ruchu na przyłączanych ścieżkach wymaga odbicia (mirror) nowych splinów. */
+  suggestReverse: boolean;
+  warnings: string[];
+  error?: string;
+}

@@ -153,8 +153,9 @@ export function splinePath(sp: RawSpline, sliText: string | null, pathIndex: num
   const c = (info?.off ?? 0) * (sp.mirror ? -1 : 1);
   const k = sp.radius !== 0 ? 1 / sp.radius : 0;
   const pts = arcPoints(sp.x, sp.y, sp.heading, sp.radius, sp.length, c);
-  // ścieżka z kierunkiem 1 biegnie od końca splinu do początku — przebieg w kolejności jazdy
-  return { pts: info?.reversed ? pts.reverse() : pts, length: Math.max(0, sp.length * (1 - c * k)) };
+  // ścieżka z kierunkiem 1 biegnie od końca splinu do początku, a spline odbity (mirror) odwraca kierunek ruchu
+  // jeszcze raz — przebieg zwracamy w kolejności jazdy
+  return { pts: (info?.reversed ?? false) !== sp.mirror ? pts.reverse() : pts, length: Math.max(0, sp.length * (1 - c * k)) };
 }
 
 /** Czy plik .sli ma choć jedną ścieżkę dla pojazdów (typ 0 drogowe albo 2 szynowe). Brak pliku = nie. */
@@ -328,7 +329,7 @@ const readText = (full: string | null): string | null => {
   }
 };
 
-function readTiles(mapDir: string): TileRef[] | null {
+export function readTiles(mapDir: string): TileRef[] | null {
   const cfgName = fs.readdirSync(mapDir).find((f) => f.toLowerCase() === 'global.cfg');
   return cfgName ? parseTiles(decodeCfg(fs.readFileSync(path.join(mapDir, cfgName))).text) : null;
 }
@@ -426,7 +427,7 @@ interface TileCache {
 const tileCache = new Map<string, TileCache>();
 const assetCache = new Map<string, { mtime: number; text: string | null }>();
 
-function cachedTile(full: string): TileCache | null {
+export function cachedTile(full: string): TileCache | null {
   try {
     const mtime = fs.statSync(full).mtimeMs;
     const hit = tileCache.get(full);
@@ -440,7 +441,7 @@ function cachedTile(full: string): TileCache | null {
   }
 }
 
-function cachedAsset(full: string | null): string | null {
+export function cachedAsset(full: string | null): string | null {
   if (!full) return null;
   try {
     const mtime = fs.statSync(full).mtimeMs;

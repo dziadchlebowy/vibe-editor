@@ -4,6 +4,9 @@ import { pinToTile } from '../shared/taskExtras.ts';
 import { TASK_TYPES, getTaskType } from '../shared/taskTypes.ts';
 import type {
   ConsoleLine,
+  LinkNode,
+  LinkNodeRef,
+  LinkPlan,
   MapCatalog,
   MapInfo,
   MapOverview,
@@ -1144,9 +1147,9 @@ function renderRoutePanel(rows: StationRow[] = stationRows()): void {
   routePanel.querySelector('.rt-row.active')?.scrollIntoView({ block: 'nearest' });
 }
 
-/** W edycji trasy warstwy Spliny, Ścieżki i Przystanki są włączane automatycznie (żeby było co klikać). */
-function enableEditLayers(): void {
-  for (const k of ['splines', 'paths', 'stops'] as const) {
+/** Włącza wskazane warstwy mapy (i ich pola wyboru), żeby było co klikać w trybach edycji. */
+function enableLayers(keys: readonly (keyof typeof mapLayers)[]): void {
+  for (const k of keys) {
     mapLayers[k] = true;
     const cb = layerCbs[k];
     if (cb) cb.checked = true;
@@ -1158,7 +1161,7 @@ function setRouteEditing(on: boolean): void {
   routeEditing = on && !!routeBase;
   editBtn.textContent = routeEditing ? '✏️ Edycja trasy: włączona' : '✏️ Edytuj trasę';
   editBtn.classList.toggle('active', routeEditing);
-  if (routeEditing) enableEditLayers();
+  if (routeEditing) enableLayers(['splines', 'paths', 'stops']);
   else {
     pickingStop = false;
     routeSel = null;
@@ -1210,9 +1213,213 @@ async function openTripRouteOnMap(tripFile: string): Promise<void> {
   activeTab = 'map';
   renderTabs();
   mapGrid.show();
+  setMapMode('routes');
   await fillRouteSelect();
   routeSelect.value = tripFile;
   await showTripRoute(tripFile);
+}
+
+// --- tryby zakładki „Mapa i trasy” ------------------------------------------------
+
+type MapMode = 'view' | 'routes' | 'links';
+let mapMode: MapMode = 'view';
+let modeButtons: Record<MapMode, HTMLButtonElement>;
+let modeBars: Record<MapMode, HTMLElement>;
+
+const MODE_INFO: Record<MapMode, { label: string; title: string }> = {
+  view: { label: '🗺️ Przegląd', title: 'Przeglądanie mapy: warstwy, edycja parametrów przystanków, pinezki do zadań' },
+  routes: { label: '🚌 Trasy kursów', title: 'Trasa kursu z pliku .ttr z przystankami; edycja trasy i przypisywanie przystanków do odcinków' },
+  links: { label: '🔗 Łączenia ścieżek', title: 'Tworzenie łączeń (spline invis_street) między węzłami ścieżek ruchu' },
+};
+
+/** Przełącza tryb zakładki: każdy tryb ma własny pasek narzędzi, a poprzedni sprząta po sobie. */
+function setMapMode(m: MapMode): void {
+  if (m === mapMode) return;
+  if (mapMode === 'routes') {
+    setRouteEditing(false);
+    mapGrid.setRoute(null);
+  }
+  if (mapMode === 'links') resetLink(true);
+  if (mapMode === 'view') setPinMode(false);
+  mapMode = m;
+  for (const k of Object.keys(MODE_INFO) as MapMode[]) {
+    modeButtons[k].classList.toggle('active', k === m);
+    modeBars[k].hidden = k !== m;
+  }
+  if (m === 'routes') applyRoute();
+  if (m === 'links') {
+    enableLayers(['splines', 'paths']);
+    mapGrid.setLinkMode(true);
+    renderLinkPanel();
+  }
+}
+
+// --- łączenia ścieżek ----------------------------------------------------------------
+
+let linkA: LinkNode | null = null;
+let linkB: LinkNode | null = null;
+let linkPlan: LinkPlan | null = null;
+let linkHover: LinkNode | null = null;
+let linkReverse = false;
+let linkReverseTouched = false;
+let linkMsg = '';
+let linkBusy = false;
+let linkPanel: HTMLElement;
+
+const nodeRef = (n: LinkNode): LinkNodeRef => ({ splineId: n.splineId, pathIndex: n.pathIndex, end: n.end, tile: n.tile });
+const sameNode = (a: LinkNode, b: LinkNode): boolean => a.splineId === b.splineId && a.pathIndex === b.pathIndex && a.end === b.end;
+
+function paintLink(): void {
+  mapGrid.setLinkOverlay({ a: linkA, b: linkB, hover: linkHover, preview: linkPlan && !linkPlan.error ? linkPlan.preview : [] });
+  renderLinkPanel();
+}
+
+/** Czyści wybór węzłów; `leave` = wychodzimy z trybu (wyłącz też obsługę kliknięć mapy). */
+function resetLink(leave = false): void {
+  linkA = linkB = linkPlan = linkHover = null;
+  linkReverse = linkReverseTouched = false;
+  linkMsg = '';
+  if (leave) {
+    mapGrid.setLinkMode(false);
+    if (linkPanel) linkPanel.hidden = true;
+  } else {
+    paintLink();
+  }
+}
+
+async function onLinkMapClick(c: { x: number; y: number; maxDistM: number }): Promise<void> {
+  if (linkBusy) return;
+  const n = await ve.pickLinkNode(c.x, c.y, c.maxDistM);
+  linkMsg = '';
+  if (!n) {
+    linkMsg = 'W tym miejscu nie ma końca ścieżki ruchu — przybliż mapę i kliknij bliżej końca splinu.';
+    paintLink();
+    return;
+  }
+  if (!linkA || linkB) {
+    linkA = n;
+    linkB = null;
+    linkPlan = null;
+  } else if (sameNode(n, linkA)) {
+    return;
+  } else {
+    linkB = n;
+    linkPlan = await ve.planLink(nodeRef(linkA), nodeRef(linkB));
+    if (!linkReverseTouched) linkReverse = linkPlan.suggestReverse;
+  }
+  paintLink();
+}
+
+let linkHoverBusy = false;
+let linkHoverLatest: { x: number; y: number; maxDistM: number } | null | undefined;
+function onLinkMapHover(c: { x: number; y: number; maxDistM: number } | null): void {
+  linkHoverLatest = c;
+  if (!linkHoverBusy) void runLinkHover();
+}
+async function runLinkHover(): Promise<void> {
+  linkHoverBusy = true;
+  try {
+    while (linkHoverLatest !== undefined) {
+      const c = linkHoverLatest;
+      linkHoverLatest = undefined;
+      const n = c && mapMode === 'links' ? await ve.pickLinkNode(c.x, c.y, c.maxDistM) : null;
+      if ((n === null) !== (linkHover === null) || (n && linkHover && !sameNode(n, linkHover))) {
+        linkHover = n;
+        mapGrid.setLinkOverlay({ a: linkA, b: linkB, hover: linkHover, preview: linkPlan && !linkPlan.error ? linkPlan.preview : [] });
+      }
+    }
+  } finally {
+    linkHoverBusy = false;
+  }
+}
+
+async function createLinkNow(): Promise<void> {
+  if (!linkA || !linkB || !linkPlan || linkPlan.error) return;
+  linkBusy = true;
+  const res = await ve.createLink(nodeRef(linkA), nodeRef(linkB), linkReverse);
+  linkBusy = false;
+  if (!res.ok) {
+    linkMsg = res.error ?? 'Nie udało się utworzyć łączenia.';
+    paintLink();
+    return;
+  }
+  const ids = res.ids ?? [];
+  resetLink();
+  linkMsg = `Utworzono ${ids.length === 1 ? 'spline' : 'spliny'} ${ids.join(', ')}. Przeskanuj mapę, aby pojawiły się w warstwie Spliny (węzły są już dostępne do kolejnych łączeń).`;
+  paintLink();
+}
+
+function nodeBlock(label: string, n: LinkNode | null): HTMLElement {
+  if (!n) return h('div', { class: 'lk-node empty' }, `${label}: kliknij węzeł na mapie`);
+  const row = (k: string, v: string): HTMLElement => h('div', {}, h('span', { class: 'lk-k' }, `${k}: `), v);
+  return h(
+    'div',
+    { class: 'lk-node' },
+    h('b', {}, `${label} · spline ${n.splineId}`),
+    row('Koniec splinu', `${n.end === 'start' ? 'początek' : 'koniec'} · ścieżka #${n.pathIndex}`),
+    row('Wysokość', `${n.height.toFixed(3)} m (oś ${n.axisHeight.toFixed(3)} + ścieżka ${n.pathHeight.toFixed(3)})`),
+    row('Nachylenie od podłoża', `${n.pitch.toFixed(3)}°`),
+    row('Skew', `${n.skew.toFixed(3)}`),
+    row('Azymut splinu', `${n.heading.toFixed(2)}°`),
+    row('Przesunięcie od osi', `${n.lateral.toFixed(2)} m`),
+    row('Ruch', n.exits ? 'pojazdy opuszczają spline w tym końcu' : 'pojazdy wjeżdżają w spline w tym końcu'),
+    row('Przyłączenie', n.linked === '0' ? 'wolny koniec' : `połączony ze splinem ${n.linked}`),
+    row('Spline', `${n.kind === 'spline_h' ? '[spline_h] z wysokością' : '[spline] płaski'}, ${n.tileFile}`),
+  );
+}
+
+function renderLinkPanel(): void {
+  if (!linkPanel) return;
+  const keep = linkPanel.querySelector('.lk-body')?.scrollTop ?? 0;
+  clear(linkPanel);
+  linkPanel.hidden = mapMode !== 'links';
+  if (linkPanel.hidden) return;
+  const p = linkPlan;
+  const body = h('div', { class: 'lk-body' }, nodeBlock('Węzeł A', linkA), nodeBlock('Węzeł B', linkB));
+  if (p?.error) body.append(h('div', { class: 'lk-err' }, `⚠ ${p.error}`));
+  else if (p && p.from && p.to) {
+    const fmt = (n: number): string => n.toFixed(2);
+    body.append(
+      h(
+        'div',
+        { class: 'lk-node plan' },
+        h('b', {}, `Łączenie ${p.from.splineId} → ${p.to.splineId}`),
+        h('div', {}, `Długość ${fmt(p.length)} m · różnica wysokości ${p.dz >= 0 ? '+' : ''}${p.dz.toFixed(3)} m · ${p.splines.length === 1 ? '1 spline' : `${p.splines.length} spliny (dwa łuki)`}`),
+        ...p.splines.map((s, i) => h('div', { class: 'lk-meta' }, `${i + 1}. ${fmt(s.length)} m, ${s.radius === 0 ? 'prosta' : `R ${fmt(s.radius)} m`}, nachylenie ${s.pitch0.toFixed(2)}° → ${s.pitch1.toFixed(2)}°, Δh ${s.dz.toFixed(3)} m, skew ${s.skew0.toFixed(2)} → ${s.skew1.toFixed(2)}`)),
+        ...p.warnings.map((w) => h('div', { class: 'lk-warn' }, `⚠ ${w}`)),
+      ),
+    );
+  }
+  if (linkMsg) body.append(h('div', { class: linkMsg.startsWith('Utworzono') ? 'lk-ok' : 'lk-err' }, linkMsg));
+  const rev = h('input', { type: 'checkbox' }) as HTMLInputElement;
+  rev.checked = linkReverse;
+  rev.addEventListener('change', () => {
+    linkReverse = rev.checked;
+    linkReverseTouched = true;
+    renderLinkPanel();
+  });
+  const ready = !!p && !p.error && !!p.from && !linkBusy;
+  linkPanel.append(
+    h('div', { class: 'rt-title' }, '🔗 Łączenie ścieżek'),
+    h('div', { class: 'rt-foot' }, 'Kliknij koniec ścieżki (węzeł) na jednym splinie, potem na drugim: jeden musi leżeć na końcu splinu, drugi na początku. Łączenie powstaje ze splinu invis_street.sli, dopasowane do obu węzłów (wysokość, nachylenie od podłoża, skew, azymut).'),
+    body,
+    h(
+      'label',
+      { class: 'lk-check', title: 'Odbija nowe spliny (mirror), co odwraca kierunek ruchu na ich ścieżce' },
+      rev,
+      ' Odwróć kierunek ścieżki',
+      p && !p.error && p.suggestReverse !== linkReverse ? h('span', { class: 'lk-warn' }, p.suggestReverse ? ' (przyłączone ścieżki sugerują odwrócenie)' : ' (przyłączone ścieżki sugerują zostawienie)') : h('span'),
+    ),
+    h(
+      'div',
+      { class: 'rt-buttons' },
+      routeButton('✔ Utwórz łączenie', 'Dopisz spliny łączące do kafla (kopia .map.bak) i przyłącz je do wolnych końców', () => void createLinkNow(), !ready, 'btn primary'),
+      routeButton('Wyczyść wybór', 'Zacznij od nowa', () => resetLink()),
+      linkMsg.startsWith('Utworzono') ? routeButton('Przeskanuj mapę', 'Odśwież warstwę splinów', () => rescanBtn.click()) : h('span'),
+    ),
+  );
+  const nb = linkPanel.querySelector('.lk-body');
+  if (nb) nb.scrollTop = keep;
 }
 
 function mountMapTab(): void {
@@ -1220,9 +1427,13 @@ function mountMapTab(): void {
   clear(root);
   mapGrid = new MapGrid({
     mode: 'info',
-    onStopClick: (s) => openStopDialog(s),
+    onStopClick: (s) => {
+      if (mapMode === 'view') openStopDialog(s);
+    },
     onRouteClick: (c) => void onRouteMapClick(c),
     onRouteHover: (c) => onRouteMapHover(c),
+    onLinkClick: (c) => void onLinkMapClick(c),
+    onLinkHover: (c) => onLinkMapHover(c),
     onPinPlaced: (p) => {
       // punkt wskazany: wracamy do zwykłego trybu i otwieramy nowe zadanie z tą pinezką
       setPinMode(false);
@@ -1253,9 +1464,11 @@ function mountMapTab(): void {
   editBtn.disabled = true;
   routePanel = h('div', { class: 'rt-panel' });
   routePanel.hidden = true;
-  mapGrid.el.append(routePanel);
+  linkPanel = h('div', { class: 'rt-panel lk-panel' });
+  linkPanel.hidden = true;
+  mapGrid.el.append(routePanel, linkPanel);
   document.addEventListener('keydown', (e) => {
-    if (!routeEditing || activeTab !== 'map') return;
+    if (!routeEditing || activeTab !== 'map' || mapMode !== 'routes') return;
     const t = e.target as HTMLElement;
     if (['INPUT', 'SELECT', 'TEXTAREA'].includes(t.tagName)) return;
     if (e.key === 'Delete') routeDelete();
@@ -1267,12 +1480,27 @@ function mountMapTab(): void {
     e.preventDefault();
   });
   void fillRouteSelect();
+
+  mapMode = 'view';
+  modeButtons = {} as Record<MapMode, HTMLButtonElement>;
+  modeBars = {} as Record<MapMode, HTMLElement>;
+  for (const k of Object.keys(MODE_INFO) as MapMode[]) {
+    modeButtons[k] = h('button', { class: `btn${k === mapMode ? ' active' : ''}`, title: MODE_INFO[k].title, onClick: () => setMapMode(k) }, MODE_INFO[k].label);
+  }
+  modeBars.view = h('div', { class: 'toolbar mode-bar' }, pinBtn, h('span', { class: 'status' }, 'Kliknij przystanek na mapie, aby edytować jego parametry.'));
+  modeBars.routes = h('div', { class: 'route-bar mode-bar' }, h('div', { class: 'toolbar' }, h('span', {}, 'Trasa kursu:'), routeSelect, editBtn), routeInfo);
+  modeBars.links = h('div', { class: 'toolbar mode-bar' }, h('span', { class: 'status' }, 'Kliknij węzły (końce ścieżek) do połączenia — szczegóły w panelu po prawej.'));
+  modeBars.routes.hidden = true;
+  modeBars.links.hidden = true;
   root.append(
+    h('div', { class: 'toolbar mode-switch' }, modeButtons.view, modeButtons.routes, modeButtons.links),
+    modeBars.view,
+    modeBars.routes,
+    modeBars.links,
     h(
       'div',
       { class: 'toolbar' },
       h('button', { class: 'btn', onClick: () => mapGrid.fit() }, 'Wycentruj'),
-      pinBtn,
       rescanBtn,
       layerBox('Spliny', 'Rysuj spliny (jezdnie)', 'splines'),
       layerBox('Ścieżki', 'Ścieżki ruchu ze splinów (po przeskanowaniu mapy)', 'paths'),
@@ -1280,7 +1508,6 @@ function mountMapTab(): void {
       h('div', { class: 'spacer' }),
       mapSummary,
     ),
-    h('div', { class: 'route-bar' }, h('div', { class: 'toolbar' }, h('span', {}, 'Trasa kursu:'), routeSelect, editBtn), routeInfo),
     mapGrid.el,
   );
   updateMapToolbar();

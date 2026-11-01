@@ -1,5 +1,5 @@
 import { toParams } from '../shared/busStop.ts';
-import type { MapObjPaths, MapOverview, MapSplines, MapStops, MapTileView, RouteSegment, TaskPin, TileCoord, TripRoute } from '../shared/types.ts';
+import type { LinkNode, MapObjPaths, MapOverview, MapSplines, MapStops, MapTileView, RouteSegment, TaskPin, TileCoord, TripRoute } from '../shared/types.ts';
 import { clear, h } from './dom.ts';
 
 /**
@@ -37,6 +37,17 @@ export interface GridOptions {
   onRouteClick?: (c: { segment: number | null; stop: GridStop | null; x: number; y: number; maxDistM: number }) => void;
   /** Ruch kursora w trybie edycji trasy (null = kursor opuścił mapę); overSegment = kursor nad odcinkiem trasy. */
   onRouteHover?: (c: { x: number; y: number; maxDistM: number; overSegment: boolean } | null) => void;
+  /** Klik i ruch kursora w trybie łączeń ścieżek (maxDistM = promień „trafienia” w węzeł w metrach). */
+  onLinkClick?: (c: { x: number; y: number; maxDistM: number }) => void;
+  onLinkHover?: (c: { x: number; y: number; maxDistM: number } | null) => void;
+}
+
+/** Nakładka trybu łączeń: wybrane węzły, węzeł pod kursorem i podgląd nowych splinów. */
+export interface LinkOverlay {
+  a: LinkNode | null;
+  b: LinkNode | null;
+  hover: LinkNode | null;
+  preview: number[][];
 }
 
 export interface GridStop {
@@ -72,6 +83,8 @@ export class MapGrid {
   private routeEditing = false;
   private routeSelected: number | null = null;
   private routeHover: RouteSegment[] = [];
+  private linkMode = false;
+  private link: LinkOverlay = { a: null, b: null, hover: null, preview: [] };
   private tip: HTMLElement;
   private selectedTile: MapTileView | null = null;
   private selectedPin: GridPin | null = null;
@@ -105,6 +118,7 @@ export class MapGrid {
     this.canvas.addEventListener('pointerleave', () => {
       this.tip.hidden = true;
       if (this.routeEditing) this.opts.onRouteHover?.(null);
+      if (this.linkMode) this.opts.onLinkHover?.(null);
     });
     this.refresh();
   }
@@ -193,6 +207,18 @@ export class MapGrid {
     this.refresh();
   }
 
+  /** Tryb łączeń ścieżek: klik i ruch kursora idą do onLinkClick / onLinkHover. */
+  setLinkMode(on: boolean): void {
+    this.linkMode = on;
+    if (!on) this.link = { a: null, b: null, hover: null, preview: [] };
+    this.refresh();
+  }
+
+  setLinkOverlay(o: LinkOverlay): void {
+    this.link = o;
+    this.draw();
+  }
+
   /** Ścieżki podświetlone pod kursorem (jedna albo cały łańcuch od zaznaczonego odcinka); pusta tablica gasi podświetlenie. */
   setRouteHover(segs: RouteSegment[]): void {
     this.routeHover = segs;
@@ -265,6 +291,13 @@ export class MapGrid {
   }
 
   private onHover(e: PointerEvent): void {
+    if (this.linkMode) {
+      if (e.buttons !== 0) return;
+      const r = this.canvas.getBoundingClientRect();
+      const w = this.worldAt(e.clientX - r.left, e.clientY - r.top);
+      this.opts.onLinkHover?.({ x: w.x, y: w.y, maxDistM: (12 * 300) / this.scale });
+      return;
+    }
     if (this.routeEditing) {
       if (e.buttons !== 0) return;
       const r = this.canvas.getBoundingClientRect();
@@ -336,6 +369,55 @@ export class MapGrid {
         }
       }
     }
+  }
+
+  /** Tryb łączeń: podgląd nowych splinów (przerywana linia), węzły A/B i węzeł pod kursorem. */
+  private drawLink(w: number, hh: number): void {
+    const o = this.link;
+    const ctx = this.ctx;
+    if (o.preview.length > 0) {
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for (const pass of [0, 1]) {
+        ctx.strokeStyle = pass === 0 ? '#ffffff' : '#008fb3';
+        ctx.lineWidth = pass === 0 ? 8 : 4.5;
+        ctx.setLineDash(pass === 0 ? [] : [10, 6]);
+        for (const l of o.preview) {
+          ctx.beginPath();
+          for (let i = 0; i < l.length; i += 2) {
+            const px = this.sx(l[i], w);
+            const py = this.sy(l[i + 1], hh);
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.stroke();
+        }
+      }
+      ctx.setLineDash([]);
+    }
+    const dot = (n: LinkNode, fill: string, label: string, ring = false): void => {
+      const x = this.sx(n.x, w);
+      const y = this.sy(n.y, hh);
+      ctx.beginPath();
+      ctx.arc(x, y, ring ? 11 : 9, 0, Math.PI * 2);
+      if (!ring) {
+        ctx.fillStyle = fill;
+        ctx.fill();
+      }
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = ring ? fill : '#ffffff';
+      ctx.stroke();
+      if (label) {
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 11px Tahoma, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, x, y + 0.5);
+      }
+    };
+    if (o.hover) dot(o.hover, '#a21cd0', '', true);
+    if (o.a) dot(o.a, '#2b9a3a', 'A');
+    if (o.b) dot(o.b, '#d6291f', 'B');
   }
 
   /** Trasa kursu: biały kontur + jaskrawa linia (zaznaczony odcinek na niebiesko); przystanki jako numerowane kółka z nazwą przy większym zbliżeniu. */
@@ -628,6 +710,11 @@ export class MapGrid {
   }
 
   private click(px: number, py: number): void {
+    if (this.linkMode) {
+      const w = this.worldAt(px, py);
+      this.opts.onLinkClick?.({ x: w.x, y: w.y, maxDistM: (12 * 300) / this.scale });
+      return;
+    }
     if (this.routeEditing) {
       const w = this.worldAt(px, py);
       this.opts.onRouteClick?.({ segment: this.segmentAt(px, py), stop: this.stopAt(px, py)?.stop ?? null, x: w.x, y: w.y, maxDistM: (10 * 300) / this.scale });
@@ -670,8 +757,10 @@ export class MapGrid {
     this.emptyMsg.textContent = this.busy
       ? 'Trwa wczytywanie kafli…'
       : 'Brak danych mapy. Skonfiguruj folder roboczy w Ustawieniach albo przeskanuj mapę.';
-    this.canvas.style.cursor = this.routeEditing || this.opts.mode === 'pin' ? 'crosshair' : this.opts.mode === 'info' ? '' : 'pointer';
-    this.hint.textContent = this.routeEditing
+    this.canvas.style.cursor = this.routeEditing || this.linkMode || this.opts.mode === 'pin' ? 'crosshair' : this.opts.mode === 'info' ? '' : 'pointer';
+    this.hint.textContent = this.linkMode
+      ? 'Łączenia: klik w koniec ścieżki (węzeł) — wybierz pierwszy, potem drugi węzeł · przeciągnij — przesuwanie · kółko — zoom'
+      : this.routeEditing
       ? 'Edycja trasy: klik w ścieżkę ruchu — dodaj odcinek po zaznaczonym · klik w odcinek trasy — zaznacz · Delete — usuń · przeciągnij — przesuwanie · kółko — zoom'
       : this.opts.mode === 'select'
         ? 'Klik — zaznacz/odznacz kafel · przeciągnij — przesuwanie · kółko — zoom'
@@ -848,6 +937,7 @@ export class MapGrid {
     this.drawObjPaths(w, hh);
     this.drawStops(w, hh);
     this.drawRoute(w, hh);
+    this.drawLink(w, hh);
 
     if (this.selectedTile && this.opts.mode === 'info') {
       const left = this.sx(this.selectedTile.x - 0.5, w);

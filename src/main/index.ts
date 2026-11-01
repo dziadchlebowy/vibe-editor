@@ -7,6 +7,7 @@ import type {
   InspectResult,
   LineFile,
   OkResult,
+  LinkNodeRef,
   RouteSegment,
   StationEdits,
   RunState,
@@ -23,6 +24,7 @@ import { applyFailed, clearFailed, writeLastRun } from './core/failed.ts';
 import { GitRunner, setupRepo, syncToRemote } from './core/git.ts';
 import { assetsDir, buildMapIndex, loadMapIndex, toCatalog, toOverview } from './core/mapIndex.ts';
 import { loadTimetable, saveLine, saveTrip } from './core/timetable.ts';
+import { createLink, pickLinkNode, planLink } from './core/pathLink.ts';
 import { hoverTrack, loadTripRoute, saveTripRoute } from './core/tripRoute.ts';
 import { loadMapSplines } from './core/mapSplines.ts';
 import { loadObjPaths } from './core/mapObjPaths.ts';
@@ -407,6 +409,21 @@ function registerIpc(): void {
     const d = mapDir();
     if (!d || !settings.workDir || ![x, y, maxDistM].every(Number.isFinite)) return { target: null, chain: [] };
     return hoverTrack(settings.workDir, d, x, y, maxDistM, Array.isArray(fromLine) ? fromLine : null);
+  });
+  ipcMain.handle('link:node', (_e, x: number, y: number, maxDistM: number) => {
+    const d = mapDir();
+    if (!d || !settings.workDir || ![x, y, maxDistM].every(Number.isFinite)) return null;
+    return pickLinkNode(settings.workDir, d, x, y, maxDistM);
+  });
+  ipcMain.handle('link:plan', (_e, a: LinkNodeRef, b: LinkNodeRef) => {
+    const d = mapDir();
+    if (!d || !settings.workDir) return { from: null, to: null, preview: [], length: 0, dz: 0, splines: [], suggestReverse: false, warnings: [], error: 'Brak skonfigurowanej mapy.' };
+    return planLink(settings.workDir, d, a, b);
+  });
+  ipcMain.handle('link:create', (_e, a: LinkNodeRef, b: LinkNodeRef, reverse: boolean) => {
+    const d = mapDir();
+    if (!d || !settings.workDir) return { ok: false, error: 'Brak skonfigurowanej mapy.' };
+    return createLink(settings.workDir, d, a, b, !!reverse);
   });
   ipcMain.handle('tt:saveRoute', (_e, tripFile: string, segments: RouteSegment[], stations: StationEdits) => {
     const d = mapDir();

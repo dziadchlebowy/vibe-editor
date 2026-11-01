@@ -8,6 +8,7 @@ import { arcPoints, buildTripRoute, loadTripRoute, objectPathPoints, parseTtr, p
 import { loadTimetable, parseTrip } from '../src/main/core/timetable.ts';
 
 const NL = '\r\n';
+const FLAT = { prev: '0', next: '0', kind: 'spline' as const, pitch0: 0, pitch1: 0, dz: 0, skew0: 0, skew1: 0 };
 const entry = (i: number, v: (string | number)[]): string => [`   ${i}:`, '[track_entry]', ...v, ''].join(NL);
 const TTR = [
   '-----------------------', 'Time Table Track File', '-----------------------', '', 'Created with Omsi Version 2.3.004', 'Date: 01.08.2026', '',
@@ -148,6 +149,7 @@ test('edytor: pickTrackPath wybiera ścieżkę pod kursorem, saveTripRoute zapis
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+import type { RawSpline } from '../src/main/core/mapSplines.ts';
 import { editStations, parseTrip as parseTripFile } from '../src/main/core/timetable.ts';
 import { hoverTrack, splinePath } from '../src/main/core/tripRoute.ts';
 
@@ -182,7 +184,7 @@ const sp = (id: number, y: number): string => rec('spline', 'Splines\\a.sli', [i
 const TILE_CHAIN = [sp(101, 0), sp(102, 100), sp(103, 200), sp(104, 300), sp(105, 500) /* luka 100 m — niepołączony */].join(NL);
 
 test('splinePath: ścieżka z kierunkiem 1 biegnie od końca splinu do początku', () => {
-  const s = { path: 'a.sli', id: '1', x: 10, y: 20, z: 0, heading: 0, length: 50, radius: 0, mirror: false };
+  const s: RawSpline = { ...FLAT, path: 'a.sli', id: '1', x: 10, y: 20, z: 0, heading: 0, length: 50, radius: 0, mirror: false };
   const sli = ['[path]', '0', '0', '0', '2.5', '0', '[path]', '0', '0', '0', '2.5', '1'].join(NL);
   assert.deepEqual(splinePath(s, sli, 0).pts.map((p) => p[1]), [20, 70]);
   assert.deepEqual(splinePath(s, sli, 1).pts.map((p) => p[1]), [70, 20]);
@@ -241,7 +243,7 @@ test('zapis trasy z przystankami: .ttp dostaje nowy przystanek z route/along z o
 import { splineTrackIndexes } from '../src/main/core/tripRoute.ts';
 
 test('numer elementu na kaflu: pozycja wśród splinów ze ścieżkami pojazdów (chodniki i spline bez ścieżek się nie liczą)', () => {
-  const mk = (path: string, id: string) => ({ path, id, x: 0, y: 0, z: 0, heading: 0, length: 10, radius: 0, mirror: false });
+  const mk = (path: string, id: string): RawSpline => ({ ...FLAT, path, id, x: 0, y: 0, z: 0, heading: 0, length: 10, radius: 0, mirror: false });
   const splines = [mk('a/chodnik.sli', '1'), mk('a/ulica.sli', '2'), mk('a/krawezник.sli', '3'), mk('a/ulica.sli', '4'), mk('a/pieszy.sli', '5'), mk('a/tor.sli', '6')];
   const sli: Record<string, string> = {
     'a/ulica.sli': ['[path]', '0', '0', '0', '2.5', '0'].join(NL),

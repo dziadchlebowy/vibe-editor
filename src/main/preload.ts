@@ -38,6 +38,9 @@ const api: VeApi = {
   saveLine: (line) => ipcRenderer.invoke('tt:saveLine', line),
   saveTrip: (trip) => ipcRenderer.invoke('tt:saveTrip', trip),
   getTripRoute: (tripFile) => ipcRenderer.invoke('tt:route', tripFile),
+  pickLinkNode: (x, y, maxDistM) => ipcRenderer.invoke('link:node', x, y, maxDistM),
+  planLink: (a, b) => ipcRenderer.invoke('link:plan', a, b),
+  createLink: (a, b, reverse) => ipcRenderer.invoke('link:create', a, b, reverse),
   hoverTrack: (x, y, maxDistM, fromLine) => ipcRenderer.invoke('tt:hover', x, y, maxDistM, fromLine),
   saveTripRoute: (tripFile, segments, stations) => ipcRenderer.invoke('tt:saveRoute', tripFile, segments, stations),
 

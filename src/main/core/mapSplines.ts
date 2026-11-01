@@ -24,6 +24,17 @@ export interface RawSpline {
   /** Promień łuku (m); 0 = prosta. */
   radius: number;
   mirror: boolean;
+  /** ID splinów przyłączonych do początku i końca ('0' = wolny koniec). */
+  prev: string;
+  next: string;
+  /** [spline_h] ma parametry pionowe; zwykły [spline] jest płaski (wartości poniżej = 0). */
+  kind: 'spline' | 'spline_h';
+  /** Nachylenie od podłoża na początku i końcu (°), różnica wysokości między końcami (m) i skew na początku i końcu. */
+  pitch0: number;
+  pitch1: number;
+  dz: number;
+  skew0: number;
+  skew1: number;
 }
 
 /**
@@ -31,17 +42,44 @@ export interface RawSpline {
  * 0 zawsze 0 · 1 ścieżka .sli · 2-4 ID własne / poprzedni / następny · 5 x · 6 wysokość · 7 y ·
  * 8 azymut (° od północy, zgodnie z ruchem wskazówek zegara) · 9 długość · 10 promień (0 = prosta) ·
  * dalej parametry pionowe itp.; na końcu bywa słowo „mirror” (profil odbity).
+ *
+ * Dla [spline_h] linijki 11–18 to: nachylenie na początku (°), nachylenie na końcu (°), różnica wysokości (m),
+ * skew na początku, skew na końcu, dwa parametry profilu bocznego i przesunięcie tekstury; wysokość między końcami
+ * zmienia się sześcienną krzywą Hermite’a o tych nachyleniach (ustalone z kafla mapy Warszawa 2008: nachylenia i skew
+ * są ciągłe między sąsiednimi splinami, a różnica wysokości równa się różnicy wysokości początków kolejnych splinów).
+ * Zwykły [spline] ma w tych polach zera i jest płaski.
  */
 export function parseTileSplines(text: string): RawSpline[] {
   const out: RawSpline[] = [];
   let rec: string[] | null = null;
+  let kind: 'spline' | 'spline_h' = 'spline';
   const flush = (): void => {
     if (!rec || rec.length < 11) return;
     const p = normalizeAssetPath(rec[1]);
     const [x, y, heading, length, radius] = [5, 7, 8, 9, 10].map((i) => Number(rec![i].replace(',', '.')));
     const z = Number(rec![6].replace(',', '.'));
     if (!p || ![x, y, heading, length, radius].every(Number.isFinite) || length <= 0) return;
-    out.push({ path: p, id: rec![2] ?? '', x, y, z: Number.isFinite(z) ? z : 0, heading, length, radius, mirror: rec.slice(11).some((l) => l.toLowerCase() === 'mirror') });
+    const tail = rec.slice(11);
+    const v = kind === 'spline_h' ? tail.map((l) => Number(l.replace(',', '.'))).map((n) => (Number.isFinite(n) ? n : 0)) : [];
+    out.push({
+      path: p,
+      id: rec![2] ?? '',
+      x,
+      y,
+      z: Number.isFinite(z) ? z : 0,
+      heading,
+      length,
+      radius,
+      mirror: tail.some((l) => l.toLowerCase() === 'mirror'),
+      prev: rec![3] ?? '0',
+      next: rec![4] ?? '0',
+      kind,
+      pitch0: v[0] ?? 0,
+      pitch1: v[1] ?? 0,
+      dz: v[2] ?? 0,
+      skew0: v[3] ?? 0,
+      skew1: v[4] ?? 0,
+    });
   };
   for (const line of splitLines(text)) {
     const t = line.trim();
@@ -49,6 +87,7 @@ export function parseTileSplines(text: string): RawSpline[] {
       flush();
       const m = t.toLowerCase();
       rec = m === '[spline]' || m === '[spline_h]' ? [] : null;
+      kind = m === '[spline_h]' ? 'spline_h' : 'spline';
     } else if (rec && t) {
       rec.push(t);
     }
