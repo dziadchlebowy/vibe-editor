@@ -53,7 +53,7 @@ Do promptu dla Claude dopisywana jest krótka notka, że dokładne dane o splina
 
 ## Zakładka „Mapa i trasy” — tryby
 
-Pasek u góry przełącza trzy tryby, każdy z własnym paskiem narzędzi (warstwy, „Wycentruj” i „Przeskanuj mapę” są wspólne):
+Pasek u góry przełącza trzy tryby, każdy z własnym paskiem narzędzi (warstwy, „Wycentruj” i „Przeskanuj mapę” są wspólne). Zaznaczanie kafli i panel ze szczegółami kafla działają tylko w trybie „Przegląd”. Na warstwie „Ścieżki” (od ok. 220 px na kafel) są **strzałki kierunku ruchu**: kierunek 1 w `.sli` oraz odbicie splinu (`mirror`) odwracają kierunek, oba naraz się znoszą; trasy kursów i podgląd łączenia też mają strzałki:
 
 - **🗺️ Przegląd** — warstwy, edycja parametrów przystanków (klik w przystanek), pinezki do zadań.
 - **🚌 Trasy kursów** — trasa z `.ttr` z przystankami, edycja trasy i przystanków (opis niżej).
@@ -61,7 +61,7 @@ Pasek u góry przełącza trzy tryby, każdy z własnym paskiem narzędzi (warst
 
 ## Łączenia ścieżek
 
-Węzeł to koniec splinu z ścieżką dla pojazdów (typ 0 lub 2 w `.sli`). Najechanie kursorem podświetla węzeł, klik wybiera węzeł A, drugi klik węzeł B; panel po prawej pokazuje o każdym: ID splinu, koniec/początek, numer ścieżki, **wysokość** (oś + wysokość ścieżki), nachylenie od podłoża, skew, azymut, przesunięcie od osi, kierunek ruchu i przyłączenie. Jeden węzeł musi leżeć na końcu splinu, drugi na początku (kolejność wskazania jest dowolna). Podgląd (przerywana linia) i „✔ Utwórz łączenie” używają `invis_street.sli` — musi leżeć luzem w `_vibe/assets/Splines` (w OMSI jest zawsze luzem w `Splines`).
+Węzeł to koniec splinu z ścieżką dla pojazdów (typ 0 lub 2 w `.sli`). Najechanie kursorem podświetla węzeł, klik wybiera koniec A, drugi klik koniec B; panel po prawej pokazuje o każdym: ID splinu, koniec/początek, numer ścieżki, **wysokość** (oś + wysokość ścieżki), nachylenie od podłoża, skew, azymut, przesunięcie od osi, kierunek ruchu i przyłączenie. Można łączyć **dowolne końce** (koniec z początkiem, koniec z końcem, początek z początkiem): łączenie wychodzi z końca splinu naprzód, a z początku „do tyłu” (azymut + 180°, nachylenie i skew z odwróconym znakiem), a prev/next ustawiane jest tylko wtedy, gdy koniec splinu jest zgodny z kierunkiem łączenia (koniec → początek) i wolny. Pole **„Łącz tylko węzły”** (domyślnie włączone) można wyłączyć: wtedy klik wskazuje **dowolny punkt mapy** (wysokość ścieżki, nachylenie i skew punktu wpisuje się w panelu; domyślnie z węzła po drugiej stronie), a klawisz **Ctrl** przy kliknięciu nadal przyciąga do najbliższego węzła. Łączenie z dowolnym punktem to jeden łuk styczny do węzła (co najmniej jeden koniec musi być węzłem). Podgląd (przerywana linia) i „✔ Utwórz łączenie” używają `invis_street.sli` — musi leżeć luzem w `_vibe/assets/Splines` (w OMSI jest zawsze luzem w `Splines`).
 
 Geometria: gdy jeden łuk nie wystarcza, powstają dwa spliny (biarc: dwa łuki styczne do siebie i do obu spliny źródłowych). Wysokość zmienia się płynnie jedną sześcienną krzywą Hermite’a na całej długości (nachylenia na końcach = nachylenia przyłączanych splinów, na styku łuków ciągłe), skew rośnie liniowo od wartości węzła A do węzła B. Wpisy to `[spline_h]` dopisywane do kafla za ostatnim splinem (numery elementów na kaflu istniejących wpisów `.ttr` się nie zmieniają), a wolne końce przyłączanych splinów dostają `prev`/`next` nowych (kopia `.map.bak`). „Odwróć kierunek ścieżki” odbija nowe spliny (`mirror`), co odwraca kierunek ruchu; domyślnie ustawia się je według kierunku ruchu na przyłączonych ścieżkach.
 

@@ -4,8 +4,10 @@ import { pinToTile } from '../shared/taskExtras.ts';
 import { TASK_TYPES, getTaskType } from '../shared/taskTypes.ts';
 import type {
   ConsoleLine,
+  LinkEnd,
+  LinkEndRef,
+  LinkFreePoint,
   LinkNode,
-  LinkNodeRef,
   LinkPlan,
   MapCatalog,
   MapInfo,
@@ -1246,6 +1248,8 @@ function setMapMode(m: MapMode): void {
     modeButtons[k].classList.toggle('active', k === m);
     modeBars[k].hidden = k !== m;
   }
+  // zaznaczanie kafli i ich szczegóły tylko w trybie „Przegląd”
+  mapGrid.setTileSelection(m === 'view');
   if (m === 'routes') applyRoute();
   if (m === 'links') {
     enableLayers(['splines', 'paths']);
@@ -1256,25 +1260,30 @@ function setMapMode(m: MapMode): void {
 
 // --- łączenia ścieżek ----------------------------------------------------------------
 
-let linkA: LinkNode | null = null;
-let linkB: LinkNode | null = null;
+let linkA: LinkEnd | null = null;
+let linkB: LinkEnd | null = null;
 let linkPlan: LinkPlan | null = null;
 let linkHover: LinkNode | null = null;
 let linkReverse = false;
 let linkReverseTouched = false;
+let linkOnlyNodes = true;
 let linkMsg = '';
 let linkBusy = false;
 let linkPanel: HTMLElement;
+/** Dowolne punkty, których wysokość/nachylenie/skew użytkownik już zmienił ręcznie (nie nadpisujemy ich z węzła). */
+const freeTouched = new WeakSet<LinkEnd>();
 
-const nodeRef = (n: LinkNode): LinkNodeRef => ({ splineId: n.splineId, pathIndex: n.pathIndex, end: n.end, tile: n.tile });
-const sameNode = (a: LinkNode, b: LinkNode): boolean => a.splineId === b.splineId && a.pathIndex === b.pathIndex && a.end === b.end;
+const isFree = (e: LinkEnd): e is LinkFreePoint => 'free' in e;
+const endRef = (e: LinkEnd): LinkEndRef => (isFree(e) ? e : { splineId: e.splineId, pathIndex: e.pathIndex, end: e.end, tile: e.tile });
+const sameEnd = (a: LinkEnd, b: LinkEnd): boolean => (isFree(a) || isFree(b) ? a === b : a.splineId === b.splineId && a.pathIndex === b.pathIndex && a.end === b.end);
+const endLabel = (e: LinkEnd | null): string => (!e ? '?' : isFree(e) ? 'punkt' : `${e.splineId}`);
 
 function paintLink(): void {
-  mapGrid.setLinkOverlay({ a: linkA, b: linkB, hover: linkHover, preview: linkPlan && !linkPlan.error ? linkPlan.preview : [] });
+  mapGrid.setLinkOverlay({ a: linkA, b: linkB, hover: linkHover, preview: linkPlan && !linkPlan.error ? linkPlan.preview : [], reverse: linkReverse });
   renderLinkPanel();
 }
 
-/** Czyści wybór węzłów; `leave` = wychodzimy z trybu (wyłącz też obsługę kliknięć mapy). */
+/** Czyści wybór końców; `leave` = wychodzimy z trybu (wyłącz też obsługę kliknięć mapy). */
 function resetLink(leave = false): void {
   linkA = linkB = linkPlan = linkHover = null;
   linkReverse = linkReverseTouched = false;
@@ -1287,32 +1296,54 @@ function resetLink(leave = false): void {
   }
 }
 
-async function onLinkMapClick(c: { x: number; y: number; maxDistM: number }): Promise<void> {
-  if (linkBusy) return;
-  const n = await ve.pickLinkNode(c.x, c.y, c.maxDistM);
-  linkMsg = '';
-  if (!n) {
-    linkMsg = 'W tym miejscu nie ma końca ścieżki ruchu — przybliż mapę i kliknij bliżej końca splinu.';
-    paintLink();
-    return;
-  }
-  if (!linkA || linkB) {
-    linkA = n;
-    linkB = null;
-    linkPlan = null;
-  } else if (sameNode(n, linkA)) {
-    return;
-  } else {
-    linkB = n;
-    linkPlan = await ve.planLink(nodeRef(linkA), nodeRef(linkB));
+/** Przelicza plan łączenia po zmianie końców; dla niewprowadzonych ręcznie punktów bierze wysokość i skew z węzła po drugiej stronie. */
+async function replanLink(): Promise<void> {
+  if (linkA && linkB) {
+    for (const [e, other] of [[linkA, linkB], [linkB, linkA]] as const) {
+      if (isFree(e) && !isFree(other) && !freeTouched.has(e)) {
+        e.height = other.height;
+        e.skew = other.skew;
+      }
+    }
+    linkPlan = await ve.planLink(endRef(linkA), endRef(linkB));
     if (!linkReverseTouched) linkReverse = linkPlan.suggestReverse;
+  } else {
+    linkPlan = null;
   }
   paintLink();
 }
 
+async function onLinkMapClick(c: { x: number; y: number; maxDistM: number; ctrl: boolean }): Promise<void> {
+  if (linkBusy) return;
+  linkMsg = '';
+  // węzły: zawsze, gdy włączone „Łącz tylko węzły”; w trybie dowolnych punktów tylko z Ctrl (przyciąganie do węzła)
+  let end: LinkEnd | null = null;
+  if (linkOnlyNodes || c.ctrl) end = await ve.pickLinkNode(c.x, c.y, c.maxDistM);
+  if (!end && linkOnlyNodes) {
+    linkMsg = 'W tym miejscu nie ma końca ścieżki ruchu — przybliż mapę i kliknij bliżej końca splinu albo wyłącz „Łącz tylko węzły”.';
+    paintLink();
+    return;
+  }
+  if (!end) {
+    const other = linkA && !linkB ? linkA : null;
+    end = { free: true, x: Math.round(c.x * 1e5) / 1e5, y: Math.round(c.y * 1e5) / 1e5, height: other ? other.height : 0, pitch: 0, skew: other ? other.skew : 0 };
+  }
+  if (!linkA || linkB) {
+    linkA = end;
+    linkB = null;
+    linkPlan = null;
+    paintLink();
+  } else if (sameEnd(end, linkA)) {
+    return;
+  } else {
+    linkB = end;
+    await replanLink();
+  }
+}
+
 let linkHoverBusy = false;
-let linkHoverLatest: { x: number; y: number; maxDistM: number } | null | undefined;
-function onLinkMapHover(c: { x: number; y: number; maxDistM: number } | null): void {
+let linkHoverLatest: { x: number; y: number; maxDistM: number; ctrl: boolean } | null | undefined;
+function onLinkMapHover(c: { x: number; y: number; maxDistM: number; ctrl: boolean } | null): void {
   linkHoverLatest = c;
   if (!linkHoverBusy) void runLinkHover();
 }
@@ -1322,10 +1353,10 @@ async function runLinkHover(): Promise<void> {
     while (linkHoverLatest !== undefined) {
       const c = linkHoverLatest;
       linkHoverLatest = undefined;
-      const n = c && mapMode === 'links' ? await ve.pickLinkNode(c.x, c.y, c.maxDistM) : null;
-      if ((n === null) !== (linkHover === null) || (n && linkHover && !sameNode(n, linkHover))) {
+      const n = c && mapMode === 'links' && (linkOnlyNodes || c.ctrl) ? await ve.pickLinkNode(c.x, c.y, c.maxDistM) : null;
+      if ((n === null) !== (linkHover === null) || (n && linkHover && !sameEnd(n, linkHover))) {
         linkHover = n;
-        mapGrid.setLinkOverlay({ a: linkA, b: linkB, hover: linkHover, preview: linkPlan && !linkPlan.error ? linkPlan.preview : [] });
+        mapGrid.setLinkOverlay({ a: linkA, b: linkB, hover: linkHover, preview: linkPlan && !linkPlan.error ? linkPlan.preview : [], reverse: linkReverse });
       }
     }
   } finally {
@@ -1336,7 +1367,7 @@ async function runLinkHover(): Promise<void> {
 async function createLinkNow(): Promise<void> {
   if (!linkA || !linkB || !linkPlan || linkPlan.error) return;
   linkBusy = true;
-  const res = await ve.createLink(nodeRef(linkA), nodeRef(linkB), linkReverse);
+  const res = await ve.createLink(endRef(linkA), endRef(linkB), linkReverse);
   linkBusy = false;
   if (!res.ok) {
     linkMsg = res.error ?? 'Nie udało się utworzyć łączenia.';
@@ -1349,22 +1380,46 @@ async function createLinkNow(): Promise<void> {
   paintLink();
 }
 
-function nodeBlock(label: string, n: LinkNode | null): HTMLElement {
-  if (!n) return h('div', { class: 'lk-node empty' }, `${label}: kliknij węzeł na mapie`);
+function endBlock(label: string, e: LinkEnd | null): HTMLElement {
+  if (!e) return h('div', { class: 'lk-node empty' }, `${label}: kliknij ${linkOnlyNodes ? 'węzeł' : 'punkt albo Ctrl+klik węzeł'} na mapie`);
   const row = (k: string, v: string): HTMLElement => h('div', {}, h('span', { class: 'lk-k' }, `${k}: `), v);
+  if (isFree(e)) {
+    const num = (k: string, unit: string, get: () => number, set: (v: number) => void): HTMLElement => {
+      const inp = h('input', { type: 'number', step: '0.1', class: 'lk-num' }) as HTMLInputElement;
+      inp.value = String(Math.round(get() * 1000) / 1000);
+      inp.addEventListener('change', () => {
+        const v = Number(inp.value);
+        if (!Number.isFinite(v)) return;
+        set(v);
+        freeTouched.add(e);
+        void replanLink();
+      });
+      return h('label', { class: 'lk-field' }, h('span', { class: 'lk-k' }, `${k}: `), inp, ` ${unit}`);
+    };
+    return h(
+      'div',
+      { class: 'lk-node' },
+      h('b', {}, `${label} · dowolny punkt`),
+      row('Położenie (jedn. kafli)', `${e.x.toFixed(4)}, ${e.y.toFixed(4)}`),
+      num('Wysokość ścieżki', 'm', () => e.height, (v) => (e.height = v)),
+      num('Nachylenie od podłoża', '°', () => e.pitch, (v) => (e.pitch = v)),
+      num('Skew', '', () => e.skew, (v) => (e.skew = v)),
+      row('Azymut', 'wynika z łuku (styczna do węzła po drugiej stronie)'),
+    );
+  }
   return h(
     'div',
     { class: 'lk-node' },
-    h('b', {}, `${label} · spline ${n.splineId}`),
-    row('Koniec splinu', `${n.end === 'start' ? 'początek' : 'koniec'} · ścieżka #${n.pathIndex}`),
-    row('Wysokość', `${n.height.toFixed(3)} m (oś ${n.axisHeight.toFixed(3)} + ścieżka ${n.pathHeight.toFixed(3)})`),
-    row('Nachylenie od podłoża', `${n.pitch.toFixed(3)}°`),
-    row('Skew', `${n.skew.toFixed(3)}`),
-    row('Azymut splinu', `${n.heading.toFixed(2)}°`),
-    row('Przesunięcie od osi', `${n.lateral.toFixed(2)} m`),
-    row('Ruch', n.exits ? 'pojazdy opuszczają spline w tym końcu' : 'pojazdy wjeżdżają w spline w tym końcu'),
-    row('Przyłączenie', n.linked === '0' ? 'wolny koniec' : `połączony ze splinem ${n.linked}`),
-    row('Spline', `${n.kind === 'spline_h' ? '[spline_h] z wysokością' : '[spline] płaski'}, ${n.tileFile}`),
+    h('b', {}, `${label} · spline ${e.splineId}`),
+    row('Koniec splinu', `${e.end === 'start' ? 'początek' : 'koniec'} · ścieżka #${e.pathIndex}`),
+    row('Wysokość', `${e.height.toFixed(3)} m (oś ${e.axisHeight.toFixed(3)} + ścieżka ${e.pathHeight.toFixed(3)})`),
+    row('Nachylenie od podłoża', `${e.pitch.toFixed(3)}°`),
+    row('Skew', `${e.skew.toFixed(3)}`),
+    row('Azymut splinu', `${e.heading.toFixed(2)}°`),
+    row('Przesunięcie od osi', `${e.lateral.toFixed(2)} m`),
+    row('Ruch', e.exits ? 'pojazdy opuszczają spline w tym końcu' : 'pojazdy wjeżdżają w spline w tym końcu'),
+    row('Przyłączenie', e.linked === '0' ? 'wolny koniec' : `połączony ze splinem ${e.linked}`),
+    row('Spline', `${e.kind === 'spline_h' ? '[spline_h] z wysokością' : '[spline] płaski'}, ${e.tileFile}`),
   );
 }
 
@@ -1375,7 +1430,7 @@ function renderLinkPanel(): void {
   linkPanel.hidden = mapMode !== 'links';
   if (linkPanel.hidden) return;
   const p = linkPlan;
-  const body = h('div', { class: 'lk-body' }, nodeBlock('Węzeł A', linkA), nodeBlock('Węzeł B', linkB));
+  const body = h('div', { class: 'lk-body' }, endBlock('Koniec A', linkA), endBlock('Koniec B', linkB));
   if (p?.error) body.append(h('div', { class: 'lk-err' }, `⚠ ${p.error}`));
   else if (p && p.from && p.to) {
     const fmt = (n: number): string => n.toFixed(2);
@@ -1383,7 +1438,7 @@ function renderLinkPanel(): void {
       h(
         'div',
         { class: 'lk-node plan' },
-        h('b', {}, `Łączenie ${p.from.splineId} → ${p.to.splineId}`),
+        h('b', {}, `Łączenie ${endLabel(p.from)} → ${endLabel(p.to)}`),
         h('div', {}, `Długość ${fmt(p.length)} m · różnica wysokości ${p.dz >= 0 ? '+' : ''}${p.dz.toFixed(3)} m · ${p.splines.length === 1 ? '1 spline' : `${p.splines.length} spliny (dwa łuki)`}`),
         ...p.splines.map((s, i) => h('div', { class: 'lk-meta' }, `${i + 1}. ${fmt(s.length)} m, ${s.radius === 0 ? 'prosta' : `R ${fmt(s.radius)} m`}, nachylenie ${s.pitch0.toFixed(2)}° → ${s.pitch1.toFixed(2)}°, Δh ${s.dz.toFixed(3)} m, skew ${s.skew0.toFixed(2)} → ${s.skew1.toFixed(2)}`)),
         ...p.warnings.map((w) => h('div', { class: 'lk-warn' }, `⚠ ${w}`)),
@@ -1396,12 +1451,20 @@ function renderLinkPanel(): void {
   rev.addEventListener('change', () => {
     linkReverse = rev.checked;
     linkReverseTouched = true;
-    renderLinkPanel();
+    paintLink();
+  });
+  const only = h('input', { type: 'checkbox' }) as HTMLInputElement;
+  only.checked = linkOnlyNodes;
+  only.addEventListener('change', () => {
+    linkOnlyNodes = only.checked;
+    linkHover = null;
+    paintLink();
   });
   const ready = !!p && !p.error && !!p.from && !linkBusy;
   linkPanel.append(
     h('div', { class: 'rt-title' }, '🔗 Łączenie ścieżek'),
-    h('div', { class: 'rt-foot' }, 'Kliknij koniec ścieżki (węzeł) na jednym splinie, potem na drugim: jeden musi leżeć na końcu splinu, drugi na początku. Łączenie powstaje ze splinu invis_street.sli, dopasowane do obu węzłów (wysokość, nachylenie od podłoża, skew, azymut).'),
+    h('div', { class: 'rt-foot' }, 'Kliknij pierwszy, potem drugi koniec łączenia. Co najmniej jeden musi być węzłem (końcem ścieżki); łączenie powstaje ze splinu invis_street.sli, dopasowane do końców (wysokość, nachylenie od podłoża, skew, azymut).'),
+    h('label', { class: 'lk-check', title: 'Gdy wyłączone, można wskazać dowolny punkt mapy; klawisz Ctrl przy kliknięciu przyciąga do najbliższego węzła' }, only, ' Łącz tylko węzły'),
     body,
     h(
       'label',

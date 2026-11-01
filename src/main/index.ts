@@ -7,7 +7,7 @@ import type {
   InspectResult,
   LineFile,
   OkResult,
-  LinkNodeRef,
+  LinkEndRef,
   RouteSegment,
   StationEdits,
   RunState,
@@ -415,12 +415,12 @@ function registerIpc(): void {
     if (!d || !settings.workDir || ![x, y, maxDistM].every(Number.isFinite)) return null;
     return pickLinkNode(settings.workDir, d, x, y, maxDistM);
   });
-  ipcMain.handle('link:plan', (_e, a: LinkNodeRef, b: LinkNodeRef) => {
+  ipcMain.handle('link:plan', (_e, a: LinkEndRef, b: LinkEndRef) => {
     const d = mapDir();
     if (!d || !settings.workDir) return { from: null, to: null, preview: [], length: 0, dz: 0, splines: [], suggestReverse: false, warnings: [], error: 'Brak skonfigurowanej mapy.' };
     return planLink(settings.workDir, d, a, b);
   });
-  ipcMain.handle('link:create', (_e, a: LinkNodeRef, b: LinkNodeRef, reverse: boolean) => {
+  ipcMain.handle('link:create', (_e, a: LinkEndRef, b: LinkEndRef, reverse: boolean) => {
     const d = mapDir();
     if (!d || !settings.workDir) return { ok: false, error: 'Brak skonfigurowanej mapy.' };
     return createLink(settings.workDir, d, a, b, !!reverse);

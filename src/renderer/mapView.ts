@@ -1,5 +1,5 @@
 import { toParams } from '../shared/busStop.ts';
-import type { LinkNode, MapObjPaths, MapOverview, MapSplines, MapStops, MapTileView, RouteSegment, TaskPin, TileCoord, TripRoute } from '../shared/types.ts';
+import type { MapObjPaths, MapOverview, MapSplines, MapStops, MapTileView, RouteSegment, TaskPin, TileCoord, TripRoute } from '../shared/types.ts';
 import { clear, h } from './dom.ts';
 
 /**
@@ -38,16 +38,18 @@ export interface GridOptions {
   /** Ruch kursora w trybie edycji trasy (null = kursor opuścił mapę); overSegment = kursor nad odcinkiem trasy. */
   onRouteHover?: (c: { x: number; y: number; maxDistM: number; overSegment: boolean } | null) => void;
   /** Klik i ruch kursora w trybie łączeń ścieżek (maxDistM = promień „trafienia” w węzeł w metrach). */
-  onLinkClick?: (c: { x: number; y: number; maxDistM: number }) => void;
-  onLinkHover?: (c: { x: number; y: number; maxDistM: number } | null) => void;
+  onLinkClick?: (c: { x: number; y: number; maxDistM: number; ctrl: boolean }) => void;
+  onLinkHover?: (c: { x: number; y: number; maxDistM: number; ctrl: boolean } | null) => void;
 }
 
 /** Nakładka trybu łączeń: wybrane węzły, węzeł pod kursorem i podgląd nowych splinów. */
 export interface LinkOverlay {
-  a: LinkNode | null;
-  b: LinkNode | null;
-  hover: LinkNode | null;
+  a: { x: number; y: number } | null;
+  b: { x: number; y: number } | null;
+  hover: { x: number; y: number } | null;
   preview: number[][];
+  /** Nowe spliny będą odbite (mirror): strzałki podglądu wskazują wtedy od końca do początku. */
+  reverse?: boolean;
 }
 
 export interface GridStop {
@@ -85,6 +87,8 @@ export class MapGrid {
   private routeHover: RouteSegment[] = [];
   private linkMode = false;
   private link: LinkOverlay = { a: null, b: null, hover: null, preview: [] };
+  private ctrl = false;
+  private tileSelect = true;
   private tip: HTMLElement;
   private selectedTile: MapTileView | null = null;
   private selectedPin: GridPin | null = null;
@@ -207,6 +211,16 @@ export class MapGrid {
     this.refresh();
   }
 
+  /** Wyłączone zaznaczanie kafli: klik nie zaznacza kafla ani pinezki, a panel szczegółów kafla jest ukryty (poza trybem „Przegląd”). */
+  setTileSelection(on: boolean): void {
+    this.tileSelect = on;
+    if (!on) {
+      this.selectedTile = null;
+      this.selectedPin = null;
+    }
+    this.refresh();
+  }
+
   /** Tryb łączeń ścieżek: klik i ruch kursora idą do onLinkClick / onLinkHover. */
   setLinkMode(on: boolean): void {
     this.linkMode = on;
@@ -295,7 +309,7 @@ export class MapGrid {
       if (e.buttons !== 0) return;
       const r = this.canvas.getBoundingClientRect();
       const w = this.worldAt(e.clientX - r.left, e.clientY - r.top);
-      this.opts.onLinkHover?.({ x: w.x, y: w.y, maxDistM: (12 * 300) / this.scale });
+      this.opts.onLinkHover?.({ x: w.x, y: w.y, maxDistM: (12 * 300) / this.scale, ctrl: e.ctrlKey });
       return;
     }
     if (this.routeEditing) {
@@ -369,6 +383,56 @@ export class MapGrid {
         }
       }
     }
+    // strzałki kierunku (ścieżki obiektów biegną od początku do końca) pośrodku każdej ścieżki
+    if (this.scale >= 220) {
+      for (const t of data.tiles) {
+        const left = this.sx(t.x - 0.5, w);
+        const top = this.sy(t.y + 0.5, hh);
+        if (left + this.scale < -50 || top + this.scale < -50 || left > w + 50 || top > hh + 50) continue;
+        for (const [di, ox, oy, rot] of t.o) {
+          const def = data.defs[di];
+          if (!def) continue;
+          const r = (rot * Math.PI) / 180;
+          for (const [x, y, hdg, radius, len] of def.t) {
+            if (len * mPx < 24) continue;
+            const k = radius !== 0 ? 1 / radius : 0;
+            const phi0 = (hdg * Math.PI) / 180;
+            const sLen = len / 2;
+            const phi = phi0 + k * sLen;
+            const lx = x + (k === 0 ? Math.sin(phi0) * sLen : (Math.cos(phi0) - Math.cos(phi)) / k);
+            const ly = y + (k === 0 ? Math.cos(phi0) * sLen : (Math.sin(phi) - Math.sin(phi0)) / k);
+            const wx = ox + lx * Math.cos(r) + ly * Math.sin(r);
+            const wy = oy - lx * Math.sin(r) + ly * Math.cos(r);
+            this.arrow(left + wx * mPx, top + (300 - wy) * mPx, this.screenAngle(phi + r), 6, '#6a005a');
+          }
+        }
+      }
+    }
+  }
+
+  /** Strzałka kierunku: trójkąt o czubku w (x, y) obróconym o `ang` (rad., 0 = w prawo ekranu); biały kontur dla czytelności. */
+  private arrow(x: number, y: number, ang: number, size: number, fill: string): void {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(ang);
+    ctx.beginPath();
+    ctx.moveTo(size, 0);
+    ctx.lineTo(-size * 0.7, -size * 0.65);
+    ctx.lineTo(-size * 0.35, 0);
+    ctx.lineTo(-size * 0.7, size * 0.65);
+    ctx.closePath();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#ffffff';
+    ctx.stroke();
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /** Kąt na ekranie dla azymutu `phi` (rad., od północy zgodnie z zegarem). */
+  private screenAngle(phi: number): number {
+    return Math.atan2(-Math.cos(phi), Math.sin(phi));
   }
 
   /** Tryb łączeń: podgląd nowych splinów (przerywana linia), węzły A/B i węzeł pod kursorem. */
@@ -394,8 +458,18 @@ export class MapGrid {
         }
       }
       ctx.setLineDash([]);
+      // strzałki kierunku ruchu na podglądzie (od początku do końca splinu, a przy odbiciu — odwrotnie)
+      for (const l of o.preview) {
+        if (l.length < 4) continue;
+        const m = Math.floor(l.length / 4) * 2 - 2;
+        const ax = this.sx(l[Math.max(0, m)], w);
+        const ay = this.sy(l[Math.max(0, m) + 1], hh);
+        const bx = this.sx(l[Math.max(0, m) + 2], w);
+        const by = this.sy(l[Math.max(0, m) + 3], hh);
+        this.arrow((ax + bx) / 2, (ay + by) / 2, Math.atan2(by - ay, bx - ax) + (o.reverse ? Math.PI : 0), 7, '#008fb3');
+      }
     }
-    const dot = (n: LinkNode, fill: string, label: string, ring = false): void => {
+    const dot = (n: { x: number; y: number }, fill: string, label: string, ring = false): void => {
       const x = this.sx(n.x, w);
       const y = this.sy(n.y, hh);
       ctx.beginPath();
@@ -452,8 +526,8 @@ export class MapGrid {
         for (const g of this.routeHover) trace(g.line);
       }
     }
-    if (this.routeEditing) {
-      // strzałki kierunku jazdy w środku każdego odcinka; początek i koniec zaznaczonego odcinka
+    {
+      // strzałki kierunku jazdy w środku każdego odcinka (zawsze); w edycji dodatkowo początek i koniec zaznaczonego odcinka
       r.segments.forEach((g, k) => {
         const l = g.line;
         if (l.length < 4) return;
@@ -701,6 +775,7 @@ export class MapGrid {
       c.classList.remove('dragging');
       if (!moved && ev.type === 'pointerup') {
         const r = c.getBoundingClientRect();
+        this.ctrl = ev.ctrlKey;
         this.click(ev.clientX - r.left, ev.clientY - r.top);
       }
     };
@@ -712,7 +787,7 @@ export class MapGrid {
   private click(px: number, py: number): void {
     if (this.linkMode) {
       const w = this.worldAt(px, py);
-      this.opts.onLinkClick?.({ x: w.x, y: w.y, maxDistM: (12 * 300) / this.scale });
+      this.opts.onLinkClick?.({ x: w.x, y: w.y, maxDistM: (12 * 300) / this.scale, ctrl: this.ctrl });
       return;
     }
     if (this.routeEditing) {
@@ -741,6 +816,7 @@ export class MapGrid {
         this.opts.onStopClick?.(stop.stop);
         return;
       }
+      if (!this.tileSelect) return;
       const pin = this.pinAt(px, py);
       this.selectedPin = pin;
       this.selectedTile = pin ? null : this.tileAt(px, py);
@@ -759,21 +835,23 @@ export class MapGrid {
       : 'Brak danych mapy. Skonfiguruj folder roboczy w Ustawieniach albo przeskanuj mapę.';
     this.canvas.style.cursor = this.routeEditing || this.linkMode || this.opts.mode === 'pin' ? 'crosshair' : this.opts.mode === 'info' ? '' : 'pointer';
     this.hint.textContent = this.linkMode
-      ? 'Łączenia: klik w koniec ścieżki (węzeł) — wybierz pierwszy, potem drugi węzeł · przeciągnij — przesuwanie · kółko — zoom'
+      ? 'Łączenia: klik — wybierz pierwszy, potem drugi koniec (węzeł albo dowolny punkt; Ctrl — przyciągaj do węzła) · przeciągnij — przesuwanie · kółko — zoom'
       : this.routeEditing
       ? 'Edycja trasy: klik w ścieżkę ruchu — dodaj odcinek po zaznaczonym · klik w odcinek trasy — zaznacz · Delete — usuń · przeciągnij — przesuwanie · kółko — zoom'
       : this.opts.mode === 'select'
         ? 'Klik — zaznacz/odznacz kafel · przeciągnij — przesuwanie · kółko — zoom'
         : this.opts.mode === 'pin'
           ? 'Kliknij punkt na mapie, aby ustawić pinezkę · przeciągnij — przesuwanie · kółko — zoom'
-          : 'Przeciągnij — przesuwanie · kółko — zoom · klik — informacje o kaflu lub pinezce';
+          : this.tileSelect
+            ? 'Przeciągnij — przesuwanie · kółko — zoom · klik — informacje o kaflu lub pinezce'
+            : 'Przeciągnij — przesuwanie · kółko — zoom';
     this.renderInfo();
     this.draw();
   }
 
   private renderInfo(): void {
     clear(this.infoBox);
-    const show = this.opts.mode === 'info' && (this.selectedTile || this.selectedPin);
+    const show = this.opts.mode === 'info' && this.tileSelect && (this.selectedTile || this.selectedPin);
     this.infoBox.hidden = !show;
     if (!show) return;
     const row = (k: string, v: string, cls = ''): HTMLElement =>
@@ -878,6 +956,30 @@ export class MapGrid {
           }
         }
       }
+      // strzałki kierunku ruchu: kierunek 1 w .sli albo odbicie splinu odwracają go, oba naraz się znoszą
+      if (this.scale >= 220) {
+        for (const { left, top, s } of visible) {
+          const [, lx, ly, hdg, len, radius] = s;
+          const lenPx = len * mPx;
+          if (lenPx < 28) continue;
+          const k = radius !== 0 ? 1 / radius : 0;
+          const phi0 = (hdg * Math.PI) / 180;
+          const n = Math.max(1, Math.min(8, Math.floor(lenPx / 120)));
+          for (const [x, , dir] of data.roads[s[0]]?.t ?? []) {
+            const c = x * (s[6] ? -1 : 1);
+            const reversed = (dir === 1) !== (s[6] === 1);
+            for (let j = 0; j < n; j++) {
+              const sLen = (len * (j + 0.5)) / n;
+              const phi = phi0 + k * sLen;
+              const mx = k === 0 ? Math.sin(phi0) * sLen : (Math.cos(phi0) - Math.cos(phi)) / k;
+              const my = k === 0 ? Math.cos(phi0) * sLen : (Math.sin(phi) - Math.sin(phi0)) / k;
+              const px = left + (lx + mx + Math.cos(phi) * c) * mPx;
+              const py = top + (300 - (ly + my - Math.sin(phi) * c)) * mPx;
+              this.arrow(px, py, this.screenAngle(phi) + (reversed ? Math.PI : 0), 6, '#6a005a');
+            }
+          }
+        }
+      }
     }
   }
 
@@ -939,7 +1041,7 @@ export class MapGrid {
     this.drawRoute(w, hh);
     this.drawLink(w, hh);
 
-    if (this.selectedTile && this.opts.mode === 'info') {
+    if (this.selectedTile && this.opts.mode === 'info' && this.tileSelect) {
       const left = this.sx(this.selectedTile.x - 0.5, w);
       const top = this.sy(this.selectedTile.y + 0.5, hh);
       ctx.strokeStyle = accent;

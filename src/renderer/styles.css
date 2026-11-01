@@ -402,6 +402,8 @@ input[type="checkbox"]:disabled, input[type="radio"]:disabled { opacity: .5; }
 .lk-err { color: #b3261e; font-size: 12px; }
 .lk-warn { color: #8a5a00; font-size: 12px; }
 .lk-ok { color: #1b6e2e; font-size: 12px; }
+.lk-num { width: 80px; }
+.lk-field { display: flex; align-items: center; gap: 4px; }
 .lk-check { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .rt-panel { position: absolute; top: 8px; right: 8px; bottom: 30px; width: 290px; display: flex; flex-direction: column; gap: 6px; padding: 6px; background: var(--bg); border: 2px solid; border-color: #fff #716f64 #716f64 #fff; box-shadow: 2px 2px 6px rgba(0,0,0,.35); }
 .rt-panel[hidden] { display: none; }

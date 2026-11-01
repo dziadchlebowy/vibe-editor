@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { arcEnd, biarc, buildNode, createLink, getLinkNode, hermite, pickLinkNode, planConnector, planLink, type Pose } from '../src/main/core/pathLink.ts';
+import type { LinkEnd } from '../src/shared/types.ts';
+import { arcEnd, biarc, buildNode, connectArcs, createLink, endPose, getLinkNode, hermite, pickLinkNode, planConnector, planLink, type Pose } from '../src/main/core/pathLink.ts';
 import { parseTileSplines } from '../src/main/core/mapSplines.ts';
 import { splinePath } from '../src/main/core/tripRoute.ts';
 
@@ -124,11 +125,12 @@ test('łączenie: dopisuje spline’y za ostatnim, przyłącza wolne końce, ko�
   // plan: kolejność wskazania dowolna
   const plan = planLink(dir, map, refB, nA);
   assert.equal(plan.error, undefined);
-  assert.equal(plan.from?.splineId, '101');
-  assert.equal(plan.to?.splineId, '102');
+  const sid = (e: LinkEnd | null): string | undefined => (e && !('free' in e) ? e.splineId : undefined);
+  assert.equal(sid(plan.from), '101');
+  assert.equal(sid(plan.to), '102');
   assert.equal(plan.suggestReverse, false);
   assert.ok(plan.length > Math.hypot(50, 60));
-  assert.equal(planLink(dir, map, nA, nA).error?.includes('końcach') ?? false, true);
+  assert.ok(planLink(dir, map, nA, nA).error); // ten sam węzeł dwa razy — końce w tym samym miejscu
 
   const res = createLink(dir, map, nA, refB, true);
   assert.equal(res.ok, true, res.error ?? '');
@@ -155,5 +157,67 @@ test('łączenie: dopisuje spline’y za ostatnim, przyłącza wolne końce, ko�
   // ten sam węzeł jest teraz zajęty: kolejne łączenie nie przyłącza, a ostrzega
   const again = planLink(dir, map, nA, refB);
   assert.equal(again.warnings.filter((w) => w.includes('już przyłączony')).length, 2);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('endPose: łączenie wychodzi z końca splinu naprzód, a z początku „do tyłu” (azymut + 180°, znaki nachylenia i skew odwrócone)', () => {
+  const base = { splineId: '1', pathIndex: 0, tile: 0, x: 1, y: 2, ax: 1, ay: 2, heading: 30, height: 5.1, axisHeight: 5, pathHeight: 0.1, pitch: 2, skew: 1, lateral: 0, exits: true, linked: '0', kind: 'spline_h' as const, sli: 'a.sli', tileFile: 'a.map' };
+  const fwdEnd = endPose({ ...base, end: 'end' }, 'from');
+  assert.deepEqual([fwdEnd.heading, fwdEnd.pitch, fwdEnd.skew], [30, 2, 1]);
+  const backStart = endPose({ ...base, end: 'start' }, 'from');
+  assert.deepEqual([backStart.heading, backStart.pitch, backStart.skew], [210, -2, -1]);
+  assert.deepEqual([endPose({ ...base, end: 'start' }, 'to').heading, endPose({ ...base, end: 'start' }, 'to').pitch], [30, 2]);
+  assert.deepEqual([endPose({ ...base, end: 'end' }, 'to').heading, endPose({ ...base, end: 'end' }, 'to').pitch], [210, -2]);
+  assert.equal(endPose({ free: true, x: 1, y: 2, height: 3, pitch: 0, skew: 0 }, 'to').heading, undefined);
+});
+
+test('connectArcs: węzeł + dowolny punkt (jeden łuk styczny do węzła), dowolny punkt + węzeł, dwa dowolne punkty to błąd', () => {
+  const node = { x: 0, y: 0, heading: 20, z: 0, pitch: 0, skew: 0 };
+  const point = { x: 40, y: 70, z: 0, pitch: 0, skew: 0 };
+  const a = connectArcs(node, point);
+  assert.ok(Array.isArray(a) && a.length === 1);
+  const e = arcEnd(a[0]);
+  assert.ok(Math.hypot(e.x - 40, e.y - 70) < 0.05 && angDiff(a[0].heading, 20) < 1e-9);
+  // od punktu do węzła: łuk kończy się w węźle ze stycznością zgodną z azymutem węzła
+  const target = { x: 100, y: 100, heading: 75, z: 0, pitch: 0, skew: 0 };
+  const b = connectArcs({ x: 60, y: 20, z: 0, pitch: 0, skew: 0 }, target);
+  assert.ok(Array.isArray(b) && b.length === 1);
+  const e2 = arcEnd(b[0]);
+  assert.ok(Math.hypot(e2.x - 100, e2.y - 100) < 0.05 && angDiff(e2.heading, 75) < 0.3);
+  assert.equal(typeof connectArcs(point, { ...point, x: 5 }), 'string');
+  assert.equal(typeof connectArcs(node, { x: 0, y: -50, z: 0, pitch: 0, skew: 0 }), 'string'); // punkt za węzłem
+});
+
+test('łączenie z dowolnym punktem: przyłącza tylko węzeł, wysokość i nachylenie punktu z zadanych wartości', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 've-free-'));
+  const map = path.join(dir, 'map');
+  fs.mkdirSync(map, { recursive: true });
+  const assets = path.join(dir, '_vibe', 'assets', 'Splines');
+  fs.mkdirSync(assets, { recursive: true });
+  fs.writeFileSync(path.join(assets, 'a.sli'), ['[path]', '0', '0', '0.1', '3', '0'].join(NL));
+  fs.writeFileSync(path.join(assets, 'invis_street.sli'), ['[path]', '0', '0', '0.100', '3', '0', ''].join(NL));
+  fs.writeFileSync(path.join(map, 'global.cfg'), ['[map]', '3', '4', 'a.map', ''].join(NL));
+  const A = splineH(101, 0, 0, 150, 10, 0, 0, 100, 0, [0, 2, 3, 0, 0, 0, 0, 0]);
+  fs.writeFileSync(path.join(map, 'a.map'), [['[version]', '1', ''].join(NL), A].join(NL));
+  const nA = pickLinkNode(dir, map, (750 + 150) / 300, (1050 + 100) / 300, 3)!;
+  assert.ok(nA);
+  const free = { free: true as const, x: (750 + 190) / 300, y: (1050 + 160) / 300, height: 20, pitch: 1, skew: 0.5 };
+  // punkt wskazany pierwszy = początek łączenia; dojście do końca splinu A „od tyłu” (od strony punktu) jest geometrycznie możliwe
+  const plan = planLink(dir, map, free, nA);
+  assert.equal(plan.from && 'free' in plan.from, true);
+  assert.equal(plan.error, undefined, plan.error ?? '');
+  const ok = planLink(dir, map, nA, free);
+  assert.equal(ok.error, undefined, ok.error ?? '');
+  assert.equal(ok.splines.length, 1);
+  assert.ok(Math.abs(ok.splines[0].pitch1 - 1) < 1e-9 && Math.abs(ok.dz - (20 - 13.1)) < 1e-9);
+  const res = createLink(dir, map, nA, free, false);
+  assert.equal(res.ok, true, res.error ?? '');
+  const out = parseTileSplines(fs.readFileSync(path.join(map, 'a.map'), 'utf8'));
+  assert.deepEqual(out.map((x) => x.id), ['101', '102']);
+  const c = out[1];
+  assert.deepEqual([out[0].next, c.prev, c.next], ['102', '101', '0']); // przyłączony tylko do węzła
+  const e = arcEnd({ x: c.x, y: c.y, heading: c.heading, length: c.length, radius: c.radius });
+  assert.ok(Math.hypot(e.x - 190, e.y - 160) < 0.01);
+  assert.ok(Math.abs(c.z + c.dz - (20 - 0.1)) < 1e-4 && c.pitch1 === 1 && c.skew1 === 0.5);
   fs.rmSync(dir, { recursive: true, force: true });
 });

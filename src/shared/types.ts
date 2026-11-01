@@ -375,6 +375,20 @@ export interface LinkNodeRef {
   tile: number;
 }
 
+/** Dowolny punkt na mapie (nie węzeł) jako koniec łączenia: położenie w jednostkach kafli oraz zadane wysokość ścieżki, nachylenie i skew. */
+export interface LinkFreePoint {
+  free: true;
+  x: number;
+  y: number;
+  height: number;
+  pitch: number;
+  skew: number;
+}
+
+/** Koniec łączenia po stronie interfejsu: węzeł ścieżki albo dowolny punkt; do procesu głównego wysyłane jako LinkEndRef. */
+export type LinkEnd = LinkNode | LinkFreePoint;
+export type LinkEndRef = LinkNodeRef | LinkFreePoint;
+
 /** Węzeł ścieżki: punkt, w którym ścieżka ruchu kończy się na końcu splinu — do niego można dołączyć łączenie. */
 export interface LinkNode extends LinkNodeRef {
   /** Punkt ścieżki i punkt osi splinu w tym końcu (jednostki kafli, jak pinezki). */
@@ -404,9 +418,9 @@ export interface LinkNode extends LinkNodeRef {
 
 /** Plan łączenia dwóch węzłów jednym lub dwoma splinami (biarc) z gładką zmianą wysokości i skew. */
 export interface LinkPlan {
-  /** Węzeł na końcu splinu (tu zaczyna się łączenie) i węzeł na początku splinu (tu się kończy). */
-  from: LinkNode | null;
-  to: LinkNode | null;
+  /** Koniec, od którego łączenie się zaczyna (kierunek splinów), i koniec, w którym się kończy; węzły albo dowolne punkty. */
+  from: LinkEnd | null;
+  to: LinkEnd | null;
   /** Przebiegi nowych splinów (płaskie [x0, y0, …] w jednostkach kafli); po jednym na spline. */
   preview: number[][];
   length: number;

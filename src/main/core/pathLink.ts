@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { LinkNode, LinkNodeRef, LinkPlan } from '../../shared/types.ts';
+import type { LinkEnd, LinkEndRef, LinkNode, LinkNodeRef, LinkPlan } from '../../shared/types.ts';
 import { decodeCfg, encodeCfg, splitLines } from './globalCfg.ts';
 import { assetsDir, safeJoin, type TileRef } from './mapIndex.ts';
 import type { RawSpline } from './mapSplines.ts';
@@ -114,7 +114,11 @@ export function hermite(L: number, p0: number, p1: number, dz: number): (s: numb
   return (s) => ({ h: a1 * s + a2 * s * s + a3 * s * s * s, slope: a1 + 2 * a2 * s + 3 * a3 * s * s });
 }
 
-export interface NodePose extends Pose {
+/** Koniec łączenia w metrach świata; bez azymutu (`heading` brak) = dowolny punkt, którego styczna wynika z łuku. */
+export interface NodePose {
+  x: number;
+  y: number;
+  heading?: number;
   /** Wysokość punktu ścieżki (m). */
   z: number;
   pitch: number;
@@ -131,13 +135,40 @@ export interface PlannedSpline extends PlannedArc {
 }
 
 /**
- * Łączenie od `from` (koniec splinu, azymut = kierunek splinu) do `to` (początek splinu): łuki w poziomie, a wysokość
- * zmienia się płynnie jedną krzywą Hermite’a na całej długości (nachylenia na końcach = nachylenia przyłączanych splinów,
- * na styku łuków — ciągłe), skew rośnie liniowo od wartości `from` do wartości `to`. `pathHeight` = wysokość ścieżki
- * łączącego splinu nad jego nawierzchnią (z invis_street.sli).
+ * Łuki łączące dwa końce: dwa węzły (z azymutem) — jedna prosta/łuk albo biarc; węzeł i dowolny punkt — jeden łuk styczny
+ * do węzła i przechodzący przez punkt (azymut w punkcie wynika z łuku); dwa dowolne punkty nie mają stycznej, więc to błąd.
+ */
+export function connectArcs(p1: NodePose, p2: NodePose): PlannedArc[] | string {
+  const h1 = typeof p1.heading === 'number';
+  const h2 = typeof p2.heading === 'number';
+  if (h1 && h2) return biarc(p1 as Pose, p2 as Pose);
+  if (!h1 && !h2) return 'Co najmniej jeden z końców musi być węzłem — Ctrl+klik przyciąga do węzła.';
+  const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+  if (dist < 0.05) return 'Końce leżą w tym samym miejscu.';
+  let arcs: PlannedArc[];
+  if (h1) {
+    const a = arcFrom([p1.x, p1.y], unit(p1.heading!), [p2.x, p2.y]);
+    if (!a) return 'Punkt leży za węzłem — nie da się go połączyć łagodnym łukiem.';
+    arcs = [{ x: p1.x, y: p1.y, heading: p1.heading!, length: a.length, radius: a.radius }];
+  } else {
+    // koniec w węźle: liczymy łuk od węzła „do tyłu” i odwracamy go (zmienia się strona skrętu)
+    const back = arcFrom([p2.x, p2.y], unit(p2.heading! + 180), [p1.x, p1.y]);
+    if (!back) return 'Punkt leży za węzłem — nie da się go połączyć łagodnym łukiem.';
+    arcs = [{ x: p1.x, y: p1.y, heading: back.endHeading + 180, length: back.length, radius: back.radius === 0 ? 0 : -back.radius }];
+  }
+  if (arcs[0].length > 6 * dist + 50) return 'Łączenie wymagałoby bardzo długiego łuku.';
+  const e = arcEnd(arcs[0]);
+  if (Math.hypot(e.x - p2.x, e.y - p2.y) > 0.05 || (h2 && angDiff(e.heading, p2.heading!) > 0.3)) return 'Nie da się połączyć tych końców łagodnym łukiem.';
+  return arcs;
+}
+
+/**
+ * Łączenie od `from` do `to` (kierunek splinów): łuki w poziomie, a wysokość zmienia się płynnie jedną krzywą Hermite’a
+ * na całej długości (nachylenia na końcach = nachylenia końców, na styku łuków — ciągłe), skew rośnie liniowo od wartości
+ * `from` do wartości `to`. `pathHeight` = wysokość ścieżki łączącego splinu nad jego nawierzchnią (z invis_street.sli).
  */
 export function planConnector(from: NodePose, to: NodePose, pathHeight: number): PlannedSpline[] | string {
-  const arcs = biarc(from, to);
+  const arcs = connectArcs(from, to);
   if (typeof arcs === 'string') return arcs;
   const total = arcs.reduce((n, a) => n + a.length, 0);
   const z0 = from.z - pathHeight;
@@ -247,8 +278,6 @@ export function getLinkNode(workDir: string, mapDir: string, ref: LinkNodeRef): 
 
 // --- plan i zapis -----------------------------------------------------------------------------------
 
-const toPose = (n: LinkNode): NodePose => ({ x: n.x * 300, y: n.y * 300, heading: n.heading, z: n.height, pitch: n.pitch, skew: n.skew });
-
 function linkSliPathHeight(workDir: string): number | string {
   const text = cachedAsset(safeJoin(assetsDir(workDir), LINK_SLI));
   if (text === null) return 'Brak pliku invis_street.sli w _vibe/assets/Splines (skopiuj go tam luzem — jest zawsze w Splines w OMSI).';
@@ -256,29 +285,58 @@ function linkSliPathHeight(workDir: string): number | string {
   return p ? p[2] : 'Plik invis_street.sli nie ma ścieżki dla pojazdów.';
 }
 
-/** Plan łączenia dwóch węzłów: jeden musi leżeć na końcu splinu, drugi na początku (kolejność wskazania jest dowolna). */
-export function planLink(workDir: string, mapDir: string, a: LinkNodeRef, b: LinkNodeRef): LinkPlan {
+/**
+ * Pozycja końca łączenia. Łączenie to spline biegnący od `from` do `to`: wychodzi z węzła na końcu splinu zgodnie z jego
+ * kierunkiem, a z węzła na początku splinu — „do tyłu” (azymut + 180°, nachylenie i skew z przeciwnym znakiem);
+ * dochodzi do węzła na początku splinu zgodnie z jego kierunkiem, a do węzła na końcu — „od tyłu”.
+ */
+export function endPose(e: LinkEnd, role: 'from' | 'to'): NodePose {
+  if ('free' in e) return { x: e.x * 300, y: e.y * 300, z: e.height, pitch: e.pitch, skew: e.skew };
+  const forward = role === 'from' ? e.end === 'end' : e.end === 'start';
+  const sign = forward ? 1 : -1;
+  return { x: e.x * 300, y: e.y * 300, heading: e.heading + (forward ? 0 : 180), z: e.height, pitch: sign * e.pitch, skew: sign * e.skew };
+}
+
+function resolveEnd(workDir: string, mapDir: string, ref: LinkEndRef): LinkEnd | null {
+  if ('free' in ref) return [ref.x, ref.y, ref.height, ref.pitch, ref.skew].every(Number.isFinite) ? { ...ref, free: true } : null;
+  return getLinkNode(workDir, mapDir, ref);
+}
+
+/** Kolejność końców: dwa węzły „początek, koniec” zamieniamy tak, by spline szedł od końca do początku (powstaje przyłączenie); poza tym jak wskazano. */
+function orient(a: LinkEnd, b: LinkEnd): { from: LinkEnd; to: LinkEnd } {
+  const swap = !('free' in a) && !('free' in b) && a.end === 'start' && b.end === 'end';
+  return swap ? { from: b, to: a } : { from: a, to: b };
+}
+
+/** Plan łączenia dwóch końców (węzły ścieżek albo dowolne punkty — co najmniej jeden musi być węzłem); bez zapisu. */
+export function planLink(workDir: string, mapDir: string, a: LinkEndRef, b: LinkEndRef): LinkPlan {
   const plan: LinkPlan = { from: null, to: null, preview: [], length: 0, dz: 0, splines: [], suggestReverse: false, warnings: [] };
-  const na = getLinkNode(workDir, mapDir, a);
-  const nb = getLinkNode(workDir, mapDir, b);
-  if (!na || !nb) return { ...plan, error: 'Nie znaleziono wskazanego węzła (spline mógł zostać zmieniony).' };
-  if (na.end === nb.end) return { ...plan, error: `Oba węzły leżą na ${na.end === 'end' ? 'końcach' : 'początkach'} splinów — wskaż jeden na końcu splinu, a drugi na początku (spliny łączą się zgodnie z kierunkiem).` };
-  const from = na.end === 'end' ? na : nb;
-  const to = na.end === 'end' ? nb : na;
+  const ea = resolveEnd(workDir, mapDir, a);
+  const eb = resolveEnd(workDir, mapDir, b);
+  if (!ea || !eb) return { ...plan, error: 'Nie znaleziono wskazanego węzła (spline mógł zostać zmieniony).' };
+  const { from, to } = orient(ea, eb);
   Object.assign(plan, { from, to });
   const ph = linkSliPathHeight(workDir);
   if (typeof ph === 'string') return { ...plan, error: ph };
-  const spl = planConnector(toPose(from), toPose(to), ph);
+  const spl = planConnector(endPose(from, 'from'), endPose(to, 'to'), ph);
   if (typeof spl === 'string') return { ...plan, error: spl };
   plan.splines = spl.map((s) => ({ length: s.length, radius: s.radius, pitch0: s.pitch0, pitch1: s.pitch1, dz: s.dz, skew0: s.skew0, skew1: s.skew1 }));
   plan.length = spl.reduce((n, s) => n + s.length, 0);
-  plan.dz = to.height - from.height;
+  plan.dz = ('free' in to ? to.height : to.height) - ('free' in from ? from.height : from.height);
   plan.preview = spl.map((s) => arcPoints(s.x, s.y, s.heading, s.radius, s.length, 0).flatMap((p) => [p[0] / 300, p[1] / 300]));
-  plan.suggestReverse = !from.exits;
-  if (from.exits === to.exits) plan.warnings.push('Kierunki ruchu na przyłączanych ścieżkach są sprzeczne (obie wyjeżdżają z splinu albo obie w niego wjeżdżają).');
-  if (from.linked !== '0') plan.warnings.push(`Koniec splinu ${from.splineId} jest już przyłączony do ${from.linked} — nowy spline nie zostanie z nim powiązany.`);
-  if (to.linked !== '0') plan.warnings.push(`Początek splinu ${to.splineId} jest już przyłączony do ${to.linked} — nowy spline nie zostanie z nim powiązany.`);
-  if (Math.abs(to.height - from.height) > 0.005 && spl.length > 0 && plan.length / Math.abs(to.height - from.height) < 8) plan.warnings.push('Spadek/wzniesienie jest bardzo strome na tak krótkim odcinku.');
+  // kierunek ruchu zgodny z kierunkiem splinu łączącego: na `from` pojazdy opuszczają przyłączony spline, na `to` w niego wjeżdżają
+  const fromNode = 'free' in from ? null : from;
+  const toNode = 'free' in to ? null : to;
+  plan.suggestReverse = fromNode ? !fromNode.exits : toNode ? toNode.exits : false;
+  if (fromNode && toNode && fromNode.exits === toNode.exits) plan.warnings.push('Kierunki ruchu na przyłączanych ścieżkach są sprzeczne (obie wyjeżdżają z splinu albo obie w niego wjeżdżają).');
+  const note = (n: LinkNode | null, compatible: boolean): void => {
+    if (!n) return;
+    if (!compatible) plan.warnings.push(`Spline ${n.splineId}: koniec skierowany przeciwnie do łączenia — geometria pasuje, ale przyłączenie (prev/next) zostanie pominięte.`);
+    else if (n.linked !== '0') plan.warnings.push(`${n.end === 'end' ? 'Koniec' : 'Początek'} splinu ${n.splineId} jest już przyłączony do ${n.linked} — nowy spline nie zostanie z nim powiązany.`);
+  };
+  note(fromNode, fromNode?.end === 'end');
+  note(toNode, toNode?.end === 'start');
+  if (Math.abs(plan.dz) > 0.005 && plan.length / Math.abs(plan.dz) < 8) plan.warnings.push('Spadek/wzniesienie jest bardzo strome na tak krótkim odcinku.');
   return plan;
 }
 
@@ -367,14 +425,14 @@ function splineInsertAt(lines: string[]): number {
  * numery elementów na kaflu istniejących wpisów .ttr się nie zmieniają — i przyłącza je do wolnych końców splinów
  * (prev/next). `reverse` odbija nowe spliny (mirror), co odwraca kierunek ruchu na ich ścieżce.
  */
-export function createLink(workDir: string, mapDir: string, a: LinkNodeRef, b: LinkNodeRef, reverse: boolean): { ok: boolean; error?: string; ids?: string[] } {
+export function createLink(workDir: string, mapDir: string, a: LinkEndRef, b: LinkEndRef, reverse: boolean): { ok: boolean; error?: string; ids?: string[] } {
   const plan = planLink(workDir, mapDir, a, b);
   if (plan.error || !plan.from || !plan.to) return { ok: false, error: plan.error ?? 'Nie udało się zaplanować łączenia.' };
   const tiles = readTiles(mapDir);
   if (!tiles) return { ok: false, error: 'Brak pliku global.cfg w folderze mapy.' };
   const ph = linkSliPathHeight(workDir);
   if (typeof ph === 'string') return { ok: false, error: ph };
-  const spl = planConnector(toPose({ ...plan.from }), toPose({ ...plan.to }), ph);
+  const spl = planConnector(endPose(plan.from, 'from'), endPose(plan.to, 'to'), ph);
   if (typeof spl === 'string') return { ok: false, error: spl };
 
   const byXY = new Map(tiles.map((t, i) => [`${t.x},${t.y}`, i]));
@@ -392,12 +450,15 @@ export function createLink(workDir: string, mapDir: string, a: LinkNodeRef, b: L
     return e;
   };
 
-  // przyłączenia do istniejących splinów (przed dopisaniem, żeby indeksy linii się nie przesunęły)
-  const fromEdit = open(plan.from.tile);
-  const toEdit = open(plan.to.tile);
-  if (!fromEdit || !toEdit) return { ok: false, error: 'Nie ma pliku kafla przyłączanego splinu.' };
-  const linkFrom = plan.from.linked === '0' && setSplineLink(fromEdit.lines, plan.from.splineId, 'next', ids[0]);
-  const linkTo = plan.to.linked === '0' && setSplineLink(toEdit.lines, plan.to.splineId, 'prev', ids[ids.length - 1]);
+  // przyłączenia do istniejących splinów (przed dopisaniem, żeby indeksy linii się nie przesunęły); tylko gdy koniec splinu
+  // jest zgodny z kierunkiem łączenia (koniec → początek) i wolny
+  const fromNode = 'free' in plan.from ? null : plan.from;
+  const toNode = 'free' in plan.to ? null : plan.to;
+  const fromEdit = fromNode ? open(fromNode.tile) : null;
+  const toEdit = toNode ? open(toNode.tile) : null;
+  if ((fromNode && !fromEdit) || (toNode && !toEdit)) return { ok: false, error: 'Nie ma pliku kafla przyłączanego splinu.' };
+  const linkFrom = !!fromNode && !!fromEdit && fromNode.end === 'end' && fromNode.linked === '0' && setSplineLink(fromEdit.lines, fromNode.splineId, 'next', ids[0]);
+  const linkTo = !!toNode && !!toEdit && toNode.end === 'start' && toNode.linked === '0' && setSplineLink(toEdit.lines, toNode.splineId, 'prev', ids[ids.length - 1]);
 
   const records = new Map<number, string[]>();
   for (let i = 0; i < spl.length; i++) {
@@ -409,8 +470,8 @@ export function createLink(workDir: string, mapDir: string, a: LinkNodeRef, b: L
     const rec = splineRecord({
       ...spl[i],
       id: ids[i],
-      prev: i === 0 ? (linkFrom ? plan.from.splineId : '0') : ids[i - 1],
-      next: i === spl.length - 1 ? (linkTo ? plan.to.splineId : '0') : ids[i + 1],
+      prev: i === 0 ? (linkFrom && fromNode ? fromNode.splineId : '0') : ids[i - 1],
+      next: i === spl.length - 1 ? (linkTo && toNode ? toNode.splineId : '0') : ids[i + 1],
       xLocal: spl[i].x - (tx - 0.5) * 300,
       yLocal: spl[i].y - (ty - 0.5) * 300,
       mirror: reverse,

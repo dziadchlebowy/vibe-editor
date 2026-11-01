@@ -15,8 +15,8 @@ import type {
   TaskView,
   TimetableData,
   TripFile,
+  LinkEndRef,
   LinkNode,
-  LinkNodeRef,
   LinkPlan,
   RouteSegment,
   StationEdits,
@@ -72,9 +72,9 @@ export interface VeApi {
   /** Węzeł ścieżki (koniec splinu z ścieżką pojazdów) najbliższy punktowi (jednostki kafli), maks. maxDistM metrów. */
   pickLinkNode(x: number, y: number, maxDistM: number): Promise<LinkNode | null>;
   /** Plan łączenia dwóch węzłów (bez zapisu). */
-  planLink(a: LinkNodeRef, b: LinkNodeRef): Promise<LinkPlan>;
+  planLink(a: LinkEndRef, b: LinkEndRef): Promise<LinkPlan>;
   /** Tworzy łączenie: dopisuje spliny z invis_street.sli do kafla i przyłącza je do wolnych końców (kopie .map.bak). */
-  createLink(a: LinkNodeRef, b: LinkNodeRef, reverse: boolean): Promise<OkResult & { ids?: string[] }>;
+  createLink(a: LinkEndRef, b: LinkEndRef, reverse: boolean): Promise<OkResult & { ids?: string[] }>;
   /** Zapisuje trasę kursu do pliku .ttr (tworzy go, jeśli go nie ma; pierwszy zapis robi kopię .ttr.bak) i zmiany przystanków do .ttp (kopia .ttp.bak). */
   saveTripRoute(tripFile: string, segments: RouteSegment[], stations: StationEdits): Promise<OkResult>;
 
