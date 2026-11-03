@@ -1,4 +1,6 @@
+import { arcEnd, arcPoints } from '../shared/arcs.ts';
 import { projectOnLine } from '../shared/geo.ts';
+import { moveSplines, newSpline, newSplineStartAt, splineEndPose, splineEndZ, type EditSpline, type NewSplineGeom, type NewSplineStart } from '../shared/splineEdit.ts';
 import { routeBases } from '../shared/routeBases.ts';
 import { pinToTile } from '../shared/taskExtras.ts';
 import { TASK_TYPES, getTaskType } from '../shared/taskTypes.ts';
@@ -15,6 +17,8 @@ import type {
   MapSplines,
   RouteSegment,
   RunState,
+  SplinePoint,
+  SplinePointRef,
   Settings,
   TaskAttachment,
   TaskInput,
@@ -26,7 +30,7 @@ import type {
 
 import { ObjectsView, RoadsView } from './assetViews.ts';
 import { $, clear, h } from './dom.ts';
-import { MapGrid, type GridPin, type GridStop } from './mapView.ts';
+import { MapGrid, type GridPin, type GridStop, type SplinePointer } from './mapView.ts';
 import { ZONES, fromParams, hasPolishChars, toParams, validateParams, type StopParams } from '../shared/busStop.ts';
 import { TimetableView } from './timetableView.ts';
 
@@ -1223,7 +1227,7 @@ async function openTripRouteOnMap(tripFile: string): Promise<void> {
 
 // --- tryby zakładki „Mapa i trasy” ------------------------------------------------
 
-type MapMode = 'view' | 'routes' | 'links';
+type MapMode = 'view' | 'routes' | 'links' | 'splines';
 let mapMode: MapMode = 'view';
 let modeButtons: Record<MapMode, HTMLButtonElement>;
 let modeBars: Record<MapMode, HTMLElement>;
@@ -1232,6 +1236,7 @@ const MODE_INFO: Record<MapMode, { label: string; title: string }> = {
   view: { label: '🗺️ Przegląd', title: 'Przeglądanie mapy: warstwy, edycja parametrów przystanków, pinezki do zadań' },
   routes: { label: '🚌 Trasy kursów', title: 'Trasa kursu z pliku .ttr z przystankami; edycja trasy i przypisywanie przystanków do odcinków' },
   links: { label: '🔗 Łączenia ścieżek', title: 'Tworzenie łączeń (spline invis_street) między węzłami ścieżek ruchu' },
+  splines: { label: '✏️ Edycja splinów', title: 'Zaznaczanie początków i końców splinów: G przesuwa, Z zmienia wysokość, N tworzy nowy spline' },
 };
 
 /** Przełącza tryb zakładki: każdy tryb ma własny pasek narzędzi, a poprzedni sprząta po sobie. */
@@ -1242,6 +1247,7 @@ function setMapMode(m: MapMode): void {
     mapGrid.setRoute(null);
   }
   if (mapMode === 'links') resetLink(true);
+  if (mapMode === 'splines') resetSpl(true);
   if (mapMode === 'view') setPinMode(false);
   mapMode = m;
   for (const k of Object.keys(MODE_INFO) as MapMode[]) {
@@ -1255,6 +1261,11 @@ function setMapMode(m: MapMode): void {
     enableLayers(['splines', 'paths']);
     mapGrid.setLinkMode(true);
     renderLinkPanel();
+  }
+  if (m === 'splines') {
+    enableLayers(['splines']);
+    mapGrid.setSplineMode(true);
+    paintSpl();
   }
 }
 
@@ -1485,6 +1496,356 @@ function renderLinkPanel(): void {
   if (nb) nb.scrollTop = keep;
 }
 
+// --- edycja splinów -------------------------------------------------------------------
+
+type SplOp =
+  | { kind: 'grab'; x0: number; y0: number; dx: number; dy: number }
+  | { kind: 'z'; py0: number; dz: number; typed: string }
+  | { kind: 'new'; from: SplinePoint | null; sx: number; sy: number; ex: number; ey: number };
+
+let splSel: SplinePoint[] = [];
+let splData: EditSpline[] = [];
+let splOp: SplOp | null = null;
+let splMouse = { x: 0, y: 0, py: 0, known: false };
+let splHover: SplinePoint | null = null;
+let splMsg = '';
+let splSli = 'Splines\\invis_street.sli';
+let splSliTouched = false;
+let splStartZ = 0;
+let splPanel: HTMLElement;
+
+const splRef = (p: SplinePointRef): SplinePointRef => ({ splineId: p.splineId, end: p.end, tile: p.tile });
+const splKey = (p: SplinePointRef): string => `${p.tile}:${p.splineId}:${p.end}`;
+const splDz = (): number => {
+  const o = splOp;
+  if (!o || o.kind !== 'z') return 0;
+  if (o.typed) {
+    const v = Number(o.typed.replace(',', '.'));
+    return Number.isFinite(v) ? v : 0;
+  }
+  return o.dz;
+};
+const lineOf = (s: { x: number; y: number; heading: number; radius: number; length: number }): number[] =>
+  arcPoints(s.x, s.y, s.heading, s.radius, s.length, 0).flatMap((q) => [q[0] / 300, q[1] / 300]);
+
+/** Spliny zaznaczonych końców po zastosowaniu bieżącej operacji (podgląd); błąd, gdy przesunięcie jest niemożliwe. */
+function splPreview(): { splines: EditSpline[]; error?: string } {
+  const sel = splSel.map(splRef);
+  if (splOp?.kind === 'grab') return moveSplines(splData, sel, splOp.dx * 300, splOp.dy * 300, 0);
+  if (splOp?.kind === 'z') return moveSplines(splData, sel, 0, 0, splDz());
+  return { splines: [] };
+}
+
+function splPointFrom(splines: EditSpline[], p: SplinePoint): SplinePoint {
+  const s = splines.find((x) => x.id === p.splineId);
+  if (!s) return p;
+  const pose = splineEndPose(s, p.end);
+  return { ...p, x: pose.x / 300, y: pose.y / 300, z: splineEndZ(s, p.end), heading: pose.heading, pitch: p.end === 'start' ? s.pitch0 : s.pitch1, linked: p.end === 'start' ? s.prev : s.next };
+}
+
+function splNewStart(op: Extract<SplOp, { kind: 'new' }>): NewSplineStart {
+  const s = op.from ? splData.find((x) => x.id === op.from!.splineId) : undefined;
+  return s && op.from ? newSplineStartAt(s, op.from.end) : { x: op.sx * 300, y: op.sy * 300, z: splStartZ };
+}
+
+function paintSpl(): void {
+  const pv = splOp && splOp.kind !== 'new' ? splPreview() : null;
+  const changed = pv && !pv.error ? pv.splines : [];
+  const state = splData.map((s) => changed.find((c) => c.id === s.id) ?? s);
+  const selected = splSel.map((p) => {
+    const s = state.find((x) => x.id === p.splineId);
+    const pose = s ? splineEndPose(s, p.end) : null;
+    return pose ? { x: pose.x / 300, y: pose.y / 300 } : { x: p.x, y: p.y };
+  });
+  const preview = changed.map(lineOf);
+  const labels = new Map<string, { x: number; y: number; zs: string[]; bold: boolean }>();
+  const addLabel = (x: number, y: number, z: number, bold: boolean): void => {
+    const key = `${Math.round(x * 100)},${Math.round(y * 100)}`;
+    const e = labels.get(key) ?? { x: x / 300, y: y / 300, zs: [], bold: false };
+    const t = z.toFixed(3);
+    if (!e.zs.includes(t)) e.zs.push(t);
+    e.bold = e.bold || bold;
+    labels.set(key, e);
+  };
+  for (const s of state) {
+    for (const end of ['start', 'end'] as const) {
+      const pose = splineEndPose(s, end);
+      addLabel(pose.x, pose.y, splineEndZ(s, end), splSel.some((p) => p.splineId === s.id && p.end === end));
+    }
+  }
+  let planned: NewSplineGeom | string | null = null;
+  if (splOp?.kind === 'new') {
+    planned = newSpline(splNewStart(splOp), splOp.ex * 300, splOp.ey * 300);
+    if (typeof planned !== 'string') {
+      preview.push(lineOf(planned));
+      addLabel(planned.x, planned.y, planned.z, true);
+      const e = arcEnd({ x: planned.x, y: planned.y, heading: planned.heading, length: planned.length, radius: planned.radius });
+      addLabel(e.x, e.y, planned.z + planned.dz, true);
+    }
+  }
+  mapGrid.setSplineOverlay({
+    selected,
+    hover: splHover ? { x: splHover.x, y: splHover.y } : null,
+    preview,
+    labels: [...labels.values()].map((l) => ({ x: l.x, y: l.y, text: `Z ${l.zs.join(' / ')}`, bold: l.bold })),
+  });
+  renderSplPanel(state, pv?.error, planned);
+}
+
+function resetSpl(leave = false): void {
+  splSel = [];
+  splData = [];
+  splOp = null;
+  splHover = null;
+  splMsg = '';
+  if (leave) {
+    mapGrid.setSplineMode(false);
+    if (splPanel) splPanel.hidden = true;
+  } else {
+    paintSpl();
+  }
+}
+
+function splBegin(kind: 'grab' | 'z' | 'new'): void {
+  if (splOp) return;
+  splMsg = '';
+  if (!splMouse.known) {
+    splMsg = 'Najpierw najedź kursorem na mapę, potem naciśnij klawisz.';
+    return paintSpl();
+  }
+  if (kind === 'new') {
+    if (splSel.length > 1) {
+      splMsg = 'Nowy spline: zaznacz jeden koniec splinu albo żaden (wtedy zaczyna się w miejscu kursora).';
+      return paintSpl();
+    }
+    splOp = { kind: 'new', from: splSel[0] ?? null, sx: splMouse.x, sy: splMouse.y, ex: splMouse.x, ey: splMouse.y };
+  } else {
+    if (splSel.length === 0) {
+      splMsg = 'Najpierw zaznacz końce splinów: klik, Shift — dodaj lub odznacz.';
+      return paintSpl();
+    }
+    splOp = kind === 'grab' ? { kind: 'grab', x0: splMouse.x, y0: splMouse.y, dx: 0, dy: 0 } : { kind: 'z', py0: splMouse.py, dz: 0, typed: '' };
+  }
+  paintSpl();
+}
+
+function splCancel(): void {
+  splOp = null;
+  splMsg = '';
+  paintSpl();
+}
+
+async function splConfirm(): Promise<void> {
+  const op = splOp;
+  if (!op) return;
+  const refs = splSel.map(splRef);
+  let res: { ok: boolean; error?: string; id?: string; tiles?: number[] };
+  if (op.kind === 'new') {
+    res = await ve.createSpline({ from: op.from ? splRef(op.from) : null, startX: op.sx, startY: op.sy, startZ: splStartZ, endX: op.ex, endY: op.ey, sli: splSli });
+  } else {
+    const pv = splPreview();
+    if (pv.error) {
+      splMsg = pv.error;
+      return paintSpl();
+    }
+    res = op.kind === 'grab' ? await ve.applySplineEdit(refs, op.dx * 300, op.dy * 300, 0) : await ve.applySplineEdit(refs, 0, 0, splDz());
+  }
+  splOp = null;
+  if (!res.ok) {
+    splMsg = res.error ?? 'Nie udało się zapisać zmiany.';
+    return paintSpl();
+  }
+  if (op.kind === 'new' && res.id) {
+    // po utworzeniu zaznaczamy koniec nowego splinu — można od razu ciągnąć dalej (N)
+    const tile = res.tiles?.[0] ?? 0;
+    const created = await ve.loadEditSplines([{ splineId: res.id, end: 'end', tile }]);
+    splData = created;
+    splSel = created.length ? [splPointFrom(created, { splineId: res.id, end: 'end', tile, x: 0, y: 0, z: 0, heading: 0, pitch: 0, linked: '0', path: splSli })] : [];
+    splMsg = `Utworzono spline ${res.id}.`;
+  } else {
+    splData = await ve.loadEditSplines(refs);
+    splSel = splSel.map((p) => splPointFrom(splData, p));
+    splMsg = op.kind === 'grab' ? 'Przesunięto zaznaczone końce splinów.' : 'Zmieniono wysokość zaznaczonych końców.';
+  }
+  paintSpl();
+}
+
+async function onSplClick(c: SplinePointer): Promise<void> {
+  if (splOp) {
+    void splConfirm();
+    return;
+  }
+  const pts = await ve.pickSplinePoints(c.x, c.y, c.maxDistM);
+  splMsg = '';
+  if (pts.length === 0) {
+    if (!c.shift) splSel = [];
+  } else if (c.shift) {
+    const all = pts.every((p) => splSel.some((q) => splKey(q) === splKey(p)));
+    splSel = all ? splSel.filter((q) => !pts.some((p) => splKey(p) === splKey(q))) : [...splSel, ...pts.filter((p) => !splSel.some((q) => splKey(q) === splKey(p)))];
+  } else {
+    splSel = pts;
+  }
+  splData = splSel.length > 0 ? await ve.loadEditSplines(splSel.map(splRef)) : [];
+  if (!splSliTouched && splSel.length === 1) splSli = splSel[0].path.replace(/\//g, '\\');
+  paintSpl();
+}
+
+let splHoverBusy = false;
+let splHoverLatest: SplinePointer | null | undefined;
+function onSplMove(c: SplinePointer | null): void {
+  if (!c) {
+    splHoverLatest = null;
+    if (!splHoverBusy) void runSplHover();
+    return;
+  }
+  splMouse = { x: c.x, y: c.y, py: c.py, known: true };
+  const op = splOp;
+  if (op) {
+    if (op.kind === 'grab') {
+      op.dx = c.x - op.x0;
+      op.dy = c.y - op.y0;
+    } else if (op.kind === 'z') {
+      if (!op.typed) op.dz = -(c.py - op.py0) * 0.01 * (c.shift ? 0.1 : c.ctrl ? 10 : 1);
+    } else {
+      op.ex = c.x;
+      op.ey = c.y;
+    }
+    paintSpl();
+    return;
+  }
+  splHoverLatest = c;
+  if (!splHoverBusy) void runSplHover();
+}
+async function runSplHover(): Promise<void> {
+  splHoverBusy = true;
+  try {
+    while (splHoverLatest !== undefined) {
+      const c = splHoverLatest;
+      splHoverLatest = undefined;
+      const p = c && mapMode === 'splines' && !splOp ? (await ve.pickSplinePoints(c.x, c.y, c.maxDistM))[0] ?? null : null;
+      if ((p === null) !== (splHover === null) || (p && splHover && splKey(p) !== splKey(splHover))) {
+        splHover = p;
+        if (!splOp) paintSpl();
+      }
+    }
+  } finally {
+    splHoverBusy = false;
+  }
+}
+
+/** Klawisze trybu: G przesuń, Z wysokość, N nowy spline, Enter zatwierdź, Esc anuluj / wyczyść zaznaczenie; w Z cyfry wpisują wartość. */
+function onSplKey(e: KeyboardEvent): boolean {
+  const k = e.key.toLowerCase();
+  if (splOp?.kind === 'z' && !e.ctrlKey && !e.metaKey && !e.altKey && (/^[0-9.,-]$/.test(e.key) || e.key === 'Backspace')) {
+    splOp.typed = e.key === 'Backspace' ? splOp.typed.slice(0, -1) : splOp.typed + e.key;
+    paintSpl();
+    return true;
+  }
+  if (k === 'escape') {
+    if (splOp) splCancel();
+    else {
+      splSel = [];
+      splData = [];
+      splMsg = '';
+      paintSpl();
+    }
+    return true;
+  }
+  if (k === 'enter' && splOp) {
+    void splConfirm();
+    return true;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey) return false;
+  if (k === 'g') splBegin('grab');
+  else if (k === 'z') splBegin('z');
+  else if (k === 'n') splBegin('new');
+  else return false;
+  return true;
+}
+
+function renderSplPanel(state: EditSpline[], error: string | undefined, planned: NewSplineGeom | string | null): void {
+  if (!splPanel) return;
+  const keep = splPanel.querySelector('.lk-body')?.scrollTop ?? 0;
+  clear(splPanel);
+  splPanel.hidden = mapMode !== 'splines';
+  if (splPanel.hidden) return;
+  const body = h('div', { class: 'lk-body' });
+  const key = (k: string, d: string): HTMLElement => h('div', { class: 'lk-meta' }, h('b', {}, k), ` — ${d}`);
+  body.append(
+    h(
+      'div',
+      { class: 'lk-node' },
+      key('Klik', 'zaznacz koniec splinu (razem z pokrywającymi się końcami innych splinów); Shift — dodaj lub odznacz'),
+      key('G', 'przesuń zaznaczone końce myszą'),
+      key('Z', 'zmień wysokość: ruch myszą w górę/dół (Shift dokładniej, Ctrl szybciej) albo wpisz liczbę'),
+      key('N', 'nowy spline: od zaznaczonego końca (albo od kursora), potem wskaż punkt końcowy'),
+      key('Klik / Enter · Esc / prawy przycisk', 'zatwierdź · anuluj'),
+    ),
+  );
+  if (splOp) {
+    const op = splOp;
+    const txt =
+      op.kind === 'grab'
+        ? `Przesuwanie: Δx ${(op.dx * 300).toFixed(2)} m, Δy ${(op.dy * 300).toFixed(2)} m`
+        : op.kind === 'z'
+          ? `Wysokość: Δz ${splDz() >= 0 ? '+' : ''}${splDz().toFixed(3)} m${op.typed ? ` (wpisano „${op.typed}”)` : ''}`
+          : typeof planned === 'string'
+            ? `Nowy spline: ${planned}`
+            : planned
+              ? `Nowy spline ${op.from ? `od splinu ${op.from.splineId}` : 'od dowolnego punktu'}: ${planned.length.toFixed(2)} m, ${planned.radius === 0 ? 'prosta' : `R ${planned.radius.toFixed(2)} m`}, Z ${planned.z.toFixed(3)} → ${(planned.z + planned.dz).toFixed(3)}`
+              : 'Nowy spline: wskaż punkt końcowy';
+    body.append(h('div', { class: 'lk-node plan' }, h('b', {}, txt), h('div', { class: 'lk-meta' }, 'klik / Enter — zatwierdź · Esc / prawy przycisk — anuluj')));
+  }
+  if (error) body.append(h('div', { class: 'lk-err' }, `⚠ ${error}`));
+  if (splSel.length === 0) body.append(h('div', { class: 'lk-node empty' }, 'Nic nie zaznaczono — kliknij początek (niebieski) lub koniec (pomarańczowy) splinu.'));
+  else {
+    const rows = state.map((s) => {
+      const selS = splSel.some((p) => p.splineId === s.id && p.end === 'start');
+      const selE = splSel.some((p) => p.splineId === s.id && p.end === 'end');
+      return h(
+        'div',
+        { class: 'lk-node' },
+        h('b', {}, `Spline ${s.id} · ${s.kind === 'spline_h' ? '[spline_h]' : '[spline]'}`),
+        h('div', {}, h('span', { class: 'lk-k' }, `${selS ? '●' : '○'} Z początkowe: `), `${s.z.toFixed(3)} m`),
+        h('div', {}, h('span', { class: 'lk-k' }, `${selE ? '●' : '○'} Z końcowe: `), `${(s.z + s.dz).toFixed(3)} m`),
+        h('div', { class: 'lk-meta' }, `Δz ${s.dz >= 0 ? '+' : ''}${s.dz.toFixed(3)} m · długość ${s.length.toFixed(2)} m · ${s.radius === 0 ? 'prosta' : `R ${s.radius.toFixed(2)} m`} · azymut ${s.heading.toFixed(2)}°`),
+      );
+    });
+    body.append(h('div', { class: 'lk-meta' }, `Zaznaczone końce: ${splSel.length}, spliny: ${state.length} (● zaznaczony koniec)`), ...rows);
+  }
+  if (splMsg) body.append(h('div', { class: splMsg.startsWith('Utworzono') || splMsg.startsWith('Przesunięto') || splMsg.startsWith('Zmieniono') ? 'lk-ok' : 'lk-err' }, splMsg));
+  const sli = h('input', { type: 'text', class: 'lk-text', title: 'Plik .sli nowego splinu (domyślnie taki jak zaznaczonego splinu)' }) as HTMLInputElement;
+  sli.value = splSli;
+  sli.addEventListener('change', () => {
+    splSli = sli.value;
+    splSliTouched = true;
+  });
+  const z = h('input', { type: 'number', step: '0.1', class: 'lk-num', title: 'Wysokość osi początku nowego splinu, gdy zaczyna się w dowolnym punkcie' }) as HTMLInputElement;
+  z.value = String(splStartZ);
+  z.addEventListener('change', () => {
+    const v = Number(z.value);
+    if (Number.isFinite(v)) splStartZ = v;
+  });
+  z.disabled = splSel.length === 1;
+  const active = !!splOp;
+  splPanel.append(
+    h('div', { class: 'rt-title' }, '✏️ Edycja splinów'),
+    body,
+    h('label', { class: 'lk-field' }, h('span', { class: 'lk-k' }, 'Nowy spline (.sli): '), sli),
+    h('label', { class: 'lk-field' }, h('span', { class: 'lk-k' }, 'Z początku (bez zaznaczonego końca): '), z, ' m'),
+    h(
+      'div',
+      { class: 'rt-buttons' },
+      routeButton('G Przesuń', 'Przesuń zaznaczone końce myszą (G)', () => splBegin('grab'), active),
+      routeButton('Z Wysokość', 'Zmień wysokość zaznaczonych końców (Z)', () => splBegin('z'), active),
+      routeButton('N Nowy spline', 'Utwórz spline od zaznaczonego końca albo od kursora (N)', () => splBegin('new'), active),
+      routeButton('Wyczyść', 'Odznacz wszystko (Esc)', () => ((splSel = []), (splData = []), (splMsg = ''), paintSpl()), active),
+    ),
+  );
+  const nb = splPanel.querySelector('.lk-body');
+  if (nb) nb.scrollTop = keep;
+}
+
 function mountMapTab(): void {
   const root = $('view-map');
   clear(root);
@@ -1497,6 +1858,9 @@ function mountMapTab(): void {
     onRouteHover: (c) => onRouteMapHover(c),
     onLinkClick: (c) => void onLinkMapClick(c),
     onLinkHover: (c) => onLinkMapHover(c),
+    onSplineClick: (c) => void onSplClick(c),
+    onSplineMove: (c) => onSplMove(c),
+    onSplineCancel: () => splCancel(),
     onPinPlaced: (p) => {
       // punkt wskazany: wracamy do zwykłego trybu i otwieramy nowe zadanie z tą pinezką
       setPinMode(false);
@@ -1529,11 +1893,18 @@ function mountMapTab(): void {
   routePanel.hidden = true;
   linkPanel = h('div', { class: 'rt-panel lk-panel' });
   linkPanel.hidden = true;
-  mapGrid.el.append(routePanel, linkPanel);
+  splPanel = h('div', { class: 'rt-panel lk-panel' });
+  splPanel.hidden = true;
+  mapGrid.el.append(routePanel, linkPanel, splPanel);
   document.addEventListener('keydown', (e) => {
-    if (!routeEditing || activeTab !== 'map' || mapMode !== 'routes') return;
+    if (activeTab !== 'map') return;
     const t = e.target as HTMLElement;
     if (['INPUT', 'SELECT', 'TEXTAREA'].includes(t.tagName)) return;
+    if (mapMode === 'splines') {
+      if (onSplKey(e)) e.preventDefault();
+      return;
+    }
+    if (!routeEditing || mapMode !== 'routes') return;
     if (e.key === 'Delete') routeDelete();
     else if (e.ctrlKey && e.key.toLowerCase() === 'z') routeUndoRedo(routeUndo, routeRedo);
     else if (e.ctrlKey && e.key.toLowerCase() === 'y') routeUndoRedo(routeRedo, routeUndo);
@@ -1553,13 +1924,16 @@ function mountMapTab(): void {
   modeBars.view = h('div', { class: 'toolbar mode-bar' }, pinBtn, h('span', { class: 'status' }, 'Kliknij przystanek na mapie, aby edytować jego parametry.'));
   modeBars.routes = h('div', { class: 'route-bar mode-bar' }, h('div', { class: 'toolbar' }, h('span', {}, 'Trasa kursu:'), routeSelect, editBtn), routeInfo);
   modeBars.links = h('div', { class: 'toolbar mode-bar' }, h('span', { class: 'status' }, 'Kliknij węzły (końce ścieżek) do połączenia — szczegóły w panelu po prawej.'));
+  modeBars.splines = h('div', { class: 'toolbar mode-bar' }, h('span', { class: 'status' }, 'Zaznacz końce splinów: G — przesuń, Z — wysokość, N — nowy spline.'));
   modeBars.routes.hidden = true;
   modeBars.links.hidden = true;
+  modeBars.splines.hidden = true;
   root.append(
-    h('div', { class: 'toolbar mode-switch' }, modeButtons.view, modeButtons.routes, modeButtons.links),
+    h('div', { class: 'toolbar mode-switch' }, modeButtons.view, modeButtons.routes, modeButtons.links, modeButtons.splines),
     modeBars.view,
     modeBars.routes,
     modeBars.links,
+    modeBars.splines,
     h(
       'div',
       { class: 'toolbar' },

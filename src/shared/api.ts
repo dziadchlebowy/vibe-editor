@@ -1,3 +1,4 @@
+import type { EditSpline } from './splineEdit.ts';
 import type {
   ConsoleLine,
   LineFile,
@@ -18,7 +19,10 @@ import type {
   LinkEndRef,
   LinkNode,
   LinkPlan,
+  NewSplineReq,
   RouteSegment,
+  SplinePoint,
+  SplinePointRef,
   StationEdits,
   TripRoute,
 } from './types.ts';
@@ -75,6 +79,14 @@ export interface VeApi {
   planLink(a: LinkEndRef, b: LinkEndRef): Promise<LinkPlan>;
   /** Tworzy łączenie: dopisuje spliny z invis_street.sli do kafla i przyłącza je do wolnych końców (kopie .map.bak). */
   createLink(a: LinkEndRef, b: LinkEndRef, reverse: boolean): Promise<OkResult & { ids?: string[] }>;
+  /** Końce splinów (wraz z pokrywającymi się końcami innych splinów) najbliższe punktowi (jednostki kafli), maks. maxDistM metrów. */
+  pickSplinePoints(x: number, y: number, maxDistM: number): Promise<SplinePoint[]>;
+  /** Spliny wskazanych końców w metrach świata — do podglądu przesunięć w interfejsie. */
+  loadEditSplines(refs: SplinePointRef[]): Promise<EditSpline[]>;
+  /** Przesuwa wskazane końce splinów (dx, dy w metrach, dz — wysokość) i zapisuje kafle (kopie .map.bak). */
+  applySplineEdit(refs: SplinePointRef[], dx: number, dy: number, dz: number): Promise<OkResult>;
+  /** Tworzy nowy spline i zapisuje go do kafla (przyłącza do wolnego końca splinu źródłowego). */
+  createSpline(req: NewSplineReq): Promise<OkResult & { id?: string }>;
   /** Zapisuje trasę kursu do pliku .ttr (tworzy go, jeśli go nie ma; pierwszy zapis robi kopię .ttr.bak) i zmiany przystanków do .ttp (kopia .ttp.bak). */
   saveTripRoute(tripFile: string, segments: RouteSegment[], stations: StationEdits): Promise<OkResult>;
 

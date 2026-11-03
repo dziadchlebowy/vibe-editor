@@ -8,6 +8,8 @@ import type {
   LineFile,
   OkResult,
   LinkEndRef,
+  NewSplineReq,
+  SplinePointRef,
   RouteSegment,
   StationEdits,
   RunState,
@@ -25,6 +27,7 @@ import { GitRunner, setupRepo, syncToRemote } from './core/git.ts';
 import { assetsDir, buildMapIndex, loadMapIndex, toCatalog, toOverview } from './core/mapIndex.ts';
 import { loadTimetable, saveLine, saveTrip } from './core/timetable.ts';
 import { createLink, pickLinkNode, planLink } from './core/pathLink.ts';
+import { applySplineEdit, createSpline, loadEditSplines, pickSplinePoints, refreshSplinesIndex } from './core/splineEdit.ts';
 import { hoverTrack, loadTripRoute, saveTripRoute } from './core/tripRoute.ts';
 import { loadMapSplines } from './core/mapSplines.ts';
 import { loadObjPaths } from './core/mapObjPaths.ts';
@@ -396,6 +399,12 @@ function registerIpc(): void {
 
   const mapDir = (): string | null =>
     settings.workDir && settings.mapFolder ? path.join(settings.workDir, settings.mapFolder) : null;
+  /** Po zapisie splinów do kafli: odśwież indeks splinów tych kafli i powiadom interfejs (zmiany widać bez przeskanowania mapy). */
+  const afterSplineWrite = (d: string, tiles: number[]): void => {
+    if (!settings.workDir) return;
+    refreshSplinesIndex(settings.workDir, d, tiles);
+    win?.webContents.send('map:changed');
+  };
   ipcMain.handle('tt:load', () => {
     const d = mapDir();
     return d ? loadTimetable(d) : { lines: [], trips: [] };
@@ -423,7 +432,31 @@ function registerIpc(): void {
   ipcMain.handle('link:create', (_e, a: LinkEndRef, b: LinkEndRef, reverse: boolean) => {
     const d = mapDir();
     if (!d || !settings.workDir) return { ok: false, error: 'Brak skonfigurowanej mapy.' };
-    return createLink(settings.workDir, d, a, b, !!reverse);
+    const r = createLink(settings.workDir, d, a, b, !!reverse);
+    if (r.ok && r.tiles) afterSplineWrite(d, r.tiles);
+    return r;
+  });
+  ipcMain.handle('spl:pick', (_e, x: number, y: number, maxDistM: number) => {
+    const d = mapDir();
+    return d && [x, y, maxDistM].every(Number.isFinite) ? pickSplinePoints(d, x, y, maxDistM) : [];
+  });
+  ipcMain.handle('spl:load', (_e, refs: SplinePointRef[]) => {
+    const d = mapDir();
+    return d && Array.isArray(refs) ? loadEditSplines(d, refs) : [];
+  });
+  ipcMain.handle('spl:apply', (_e, refs: SplinePointRef[], dx: number, dy: number, dz: number) => {
+    const d = mapDir();
+    if (!d || !settings.workDir || !Array.isArray(refs)) return { ok: false, error: 'Brak skonfigurowanej mapy.' };
+    const r = applySplineEdit(d, refs, dx, dy, dz);
+    if (r.ok && r.tiles) afterSplineWrite(d, r.tiles);
+    return r;
+  });
+  ipcMain.handle('spl:create', (_e, req: NewSplineReq) => {
+    const d = mapDir();
+    if (!d || !settings.workDir) return { ok: false, error: 'Brak skonfigurowanej mapy.' };
+    const r = createSpline(d, req);
+    if (r.ok && r.tiles) afterSplineWrite(d, r.tiles);
+    return r;
   });
   ipcMain.handle('tt:saveRoute', (_e, tripFile: string, segments: RouteSegment[], stations: StationEdits) => {
     const d = mapDir();

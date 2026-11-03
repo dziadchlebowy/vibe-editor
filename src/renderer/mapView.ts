@@ -40,6 +40,28 @@ export interface GridOptions {
   /** Klik i ruch kursora w trybie łączeń ścieżek (maxDistM = promień „trafienia” w węzeł w metrach). */
   onLinkClick?: (c: { x: number; y: number; maxDistM: number; ctrl: boolean }) => void;
   onLinkHover?: (c: { x: number; y: number; maxDistM: number; ctrl: boolean } | null) => void;
+  /** Edycja splinów: klik (px/py = pozycja na ekranie, x/y w jednostkach kafli), ruch kursora i anulowanie prawym przyciskiem. */
+  onSplineClick?: (c: SplinePointer) => void;
+  onSplineMove?: (c: SplinePointer | null) => void;
+  onSplineCancel?: () => void;
+}
+
+export interface SplinePointer {
+  x: number;
+  y: number;
+  px: number;
+  py: number;
+  maxDistM: number;
+  shift: boolean;
+  ctrl: boolean;
+}
+
+/** Nakładka trybu edycji splinów: zaznaczone końce, koniec pod kursorem, podgląd zmian i etykiety wysokości. */
+export interface SplineOverlay {
+  selected: { x: number; y: number }[];
+  hover: { x: number; y: number } | null;
+  preview: number[][];
+  labels: { x: number; y: number; text: string; bold?: boolean }[];
 }
 
 /** Nakładka trybu łączeń: wybrane węzły, węzeł pod kursorem i podgląd nowych splinów. */
@@ -88,6 +110,9 @@ export class MapGrid {
   private linkMode = false;
   private link: LinkOverlay = { a: null, b: null, hover: null, preview: [] };
   private ctrl = false;
+  private shift = false;
+  private splineMode = false;
+  private splineOv: SplineOverlay = { selected: [], hover: null, preview: [], labels: [] };
   private tileSelect = true;
   private tip: HTMLElement;
   private selectedTile: MapTileView | null = null;
@@ -123,6 +148,12 @@ export class MapGrid {
       this.tip.hidden = true;
       if (this.routeEditing) this.opts.onRouteHover?.(null);
       if (this.linkMode) this.opts.onLinkHover?.(null);
+      if (this.splineMode) this.opts.onSplineMove?.(null);
+    });
+    this.canvas.addEventListener('contextmenu', (e) => {
+      if (!this.splineMode) return;
+      e.preventDefault();
+      this.opts.onSplineCancel?.();
     });
     this.refresh();
   }
@@ -221,6 +252,18 @@ export class MapGrid {
     this.refresh();
   }
 
+  /** Tryb edycji splinów: klik, ruch kursora i prawy przycisk idą do onSpline*; rysowane są uchwyty początków i końców splinów. */
+  setSplineMode(on: boolean): void {
+    this.splineMode = on;
+    if (!on) this.splineOv = { selected: [], hover: null, preview: [], labels: [] };
+    this.refresh();
+  }
+
+  setSplineOverlay(o: SplineOverlay): void {
+    this.splineOv = o;
+    this.draw();
+  }
+
   /** Tryb łączeń ścieżek: klik i ruch kursora idą do onLinkClick / onLinkHover. */
   setLinkMode(on: boolean): void {
     this.linkMode = on;
@@ -305,6 +348,12 @@ export class MapGrid {
   }
 
   private onHover(e: PointerEvent): void {
+    if (this.splineMode) {
+      if (e.buttons !== 0) return;
+      const r = this.canvas.getBoundingClientRect();
+      this.opts.onSplineMove?.(this.splinePointer(e.clientX - r.left, e.clientY - r.top, e.shiftKey, e.ctrlKey));
+      return;
+    }
     if (this.linkMode) {
       if (e.buttons !== 0) return;
       const r = this.canvas.getBoundingClientRect();
@@ -407,6 +456,90 @@ export class MapGrid {
           }
         }
       }
+    }
+  }
+
+  /** Edycja splinów: uchwyty początków (niebieskie) i końców (pomarańczowe) widocznych splinów, zaznaczenie, podgląd i etykiety Z. */
+  private drawSplineEdit(w: number, hh: number): void {
+    if (!this.splineMode) return;
+    const ctx = this.ctx;
+    const data = this.splines;
+    if (data && this.scale >= 120) {
+      const mPx = this.scale / 300;
+      for (const t of data.tiles) {
+        const left = this.sx(t.x - 0.5, w);
+        const top = this.sy(t.y + 0.5, hh);
+        if (left + this.scale < -20 || top + this.scale < -20 || left > w + 20 || top > hh + 20) continue;
+        for (const s of t.s) {
+          const [, lx, ly, hdg, len, radius] = s;
+          const k = radius !== 0 ? 1 / radius : 0;
+          const phi0 = (hdg * Math.PI) / 180;
+          const phi = phi0 + k * len;
+          const mx = k === 0 ? Math.sin(phi0) * len : (Math.cos(phi0) - Math.cos(phi)) / k;
+          const my = k === 0 ? Math.cos(phi0) * len : (Math.sin(phi) - Math.sin(phi0)) / k;
+          for (const [px, py, col] of [
+            [left + lx * mPx, top + (300 - ly) * mPx, '#1d5fd0'],
+            [left + (lx + mx) * mPx, top + (300 - (ly + my)) * mPx, '#d9731a'],
+          ] as const) {
+            ctx.beginPath();
+            ctx.arc(px, py, 3.5, 0, Math.PI * 2);
+            ctx.fillStyle = col;
+            ctx.fill();
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = '#ffffff';
+            ctx.stroke();
+          }
+        }
+      }
+    }
+    const o = this.splineOv;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (const pass of [0, 1]) {
+      ctx.strokeStyle = pass === 0 ? '#ffffff' : '#a21cd0';
+      ctx.lineWidth = pass === 0 ? 7 : 3.5;
+      ctx.setLineDash(pass === 0 ? [] : [9, 5]);
+      for (const l of o.preview) {
+        ctx.beginPath();
+        for (let i = 0; i < l.length; i += 2) {
+          const px = this.sx(l[i], w);
+          const py = this.sy(l[i + 1], hh);
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.setLineDash([]);
+    if (o.hover) {
+      ctx.beginPath();
+      ctx.arc(this.sx(o.hover.x, w), this.sy(o.hover.y, hh), 9, 0, Math.PI * 2);
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#a21cd0';
+      ctx.stroke();
+    }
+    for (const p of o.selected) {
+      const x = this.sx(p.x, w);
+      const y = this.sy(p.y, hh);
+      ctx.beginPath();
+      ctx.arc(x, y, 8, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffd400';
+      ctx.fill();
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = '#1b1b1b';
+      ctx.stroke();
+    }
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    for (const l of o.labels) {
+      const x = this.sx(l.x, w) + 11;
+      const y = this.sy(l.y, hh) - 9;
+      ctx.font = `${l.bold ? 'bold ' : ''}12px Tahoma, sans-serif`;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#ffffff';
+      ctx.strokeText(l.text, x, y);
+      ctx.fillStyle = l.bold ? '#7a0066' : '#1b1b1b';
+      ctx.fillText(l.text, x, y);
     }
   }
 
@@ -776,6 +909,7 @@ export class MapGrid {
       if (!moved && ev.type === 'pointerup') {
         const r = c.getBoundingClientRect();
         this.ctrl = ev.ctrlKey;
+        this.shift = ev.shiftKey;
         this.click(ev.clientX - r.left, ev.clientY - r.top);
       }
     };
@@ -784,7 +918,16 @@ export class MapGrid {
     c.addEventListener('pointercancel', up);
   }
 
+  private splinePointer(px: number, py: number, shift: boolean, ctrl: boolean): SplinePointer {
+    const w = this.worldAt(px, py);
+    return { x: w.x, y: w.y, px, py, maxDistM: (12 * 300) / this.scale, shift, ctrl };
+  }
+
   private click(px: number, py: number): void {
+    if (this.splineMode) {
+      this.opts.onSplineClick?.(this.splinePointer(px, py, this.shift, this.ctrl));
+      return;
+    }
     if (this.linkMode) {
       const w = this.worldAt(px, py);
       this.opts.onLinkClick?.({ x: w.x, y: w.y, maxDistM: (12 * 300) / this.scale, ctrl: this.ctrl });
@@ -833,8 +976,10 @@ export class MapGrid {
     this.emptyMsg.textContent = this.busy
       ? 'Trwa wczytywanie kafli…'
       : 'Brak danych mapy. Skonfiguruj folder roboczy w Ustawieniach albo przeskanuj mapę.';
-    this.canvas.style.cursor = this.routeEditing || this.linkMode || this.opts.mode === 'pin' ? 'crosshair' : this.opts.mode === 'info' ? '' : 'pointer';
-    this.hint.textContent = this.linkMode
+    this.canvas.style.cursor = this.routeEditing || this.linkMode || this.splineMode || this.opts.mode === 'pin' ? 'crosshair' : this.opts.mode === 'info' ? '' : 'pointer';
+    this.hint.textContent = this.splineMode
+      ? 'Edycja splinów: klik — zaznacz koniec splinu (Shift — dodaj/odznacz) · G — przesuń · Z — wysokość · N — nowy spline · klik — zatwierdź · Esc / prawy przycisk — anuluj'
+      : this.linkMode
       ? 'Łączenia: klik — wybierz pierwszy, potem drugi koniec (węzeł albo dowolny punkt; Ctrl — przyciągaj do węzła) · przeciągnij — przesuwanie · kółko — zoom'
       : this.routeEditing
       ? 'Edycja trasy: klik w ścieżkę ruchu — dodaj odcinek po zaznaczonym · klik w odcinek trasy — zaznacz · Delete — usuń · przeciągnij — przesuwanie · kółko — zoom'
@@ -1040,6 +1185,7 @@ export class MapGrid {
     this.drawStops(w, hh);
     this.drawRoute(w, hh);
     this.drawLink(w, hh);
+    this.drawSplineEdit(w, hh);
 
     if (this.selectedTile && this.opts.mode === 'info' && this.tileSelect) {
       const left = this.sx(this.selectedTile.x - 0.5, w);

@@ -41,6 +41,10 @@ const api: VeApi = {
   pickLinkNode: (x, y, maxDistM) => ipcRenderer.invoke('link:node', x, y, maxDistM),
   planLink: (a, b) => ipcRenderer.invoke('link:plan', a, b),
   createLink: (a, b, reverse) => ipcRenderer.invoke('link:create', a, b, reverse),
+  pickSplinePoints: (x, y, maxDistM) => ipcRenderer.invoke('spl:pick', x, y, maxDistM),
+  loadEditSplines: (refs) => ipcRenderer.invoke('spl:load', refs),
+  applySplineEdit: (refs, dx, dy, dz) => ipcRenderer.invoke('spl:apply', refs, dx, dy, dz),
+  createSpline: (req) => ipcRenderer.invoke('spl:create', req),
   hoverTrack: (x, y, maxDistM, fromLine) => ipcRenderer.invoke('tt:hover', x, y, maxDistM, fromLine),
   saveTripRoute: (tripFile, segments, stations) => ipcRenderer.invoke('tt:saveRoute', tripFile, segments, stations),
 

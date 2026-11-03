@@ -58,6 +58,7 @@ Pasek u góry przełącza trzy tryby, każdy z własnym paskiem narzędzi (warst
 - **🗺️ Przegląd** — warstwy, edycja parametrów przystanków (klik w przystanek), pinezki do zadań.
 - **🚌 Trasy kursów** — trasa z `.ttr` z przystankami, edycja trasy i przystanków (opis niżej).
 - **🔗 Łączenia ścieżek** — tworzenie łączeń między węzłami ścieżek (opis niżej).
+- **✏️ Edycja splinów** — zaznaczanie początków i końców splinów, przesuwanie, wysokość, nowe spliny (opis niżej).
 
 ## Łączenia ścieżek
 
@@ -66,6 +67,16 @@ Węzeł to koniec splinu z ścieżką dla pojazdów (typ 0 lub 2 w `.sli`). Naje
 Geometria: gdy jeden łuk nie wystarcza, powstają dwa spliny (biarc: dwa łuki styczne do siebie i do obu spliny źródłowych). Wysokość zmienia się płynnie jedną sześcienną krzywą Hermite’a na całej długości (nachylenia na końcach = nachylenia przyłączanych splinów, na styku łuków ciągłe), skew rośnie liniowo od wartości węzła A do węzła B. Wpisy to `[spline_h]` dopisywane do kafla za ostatnim splinem (numery elementów na kaflu istniejących wpisów `.ttr` się nie zmieniają), a wolne końce przyłączanych splinów dostają `prev`/`next` nowych (kopia `.map.bak`). „Odwróć kierunek ścieżki” odbija nowe spliny (`mirror`), co odwraca kierunek ruchu; domyślnie ustawia się je według kierunku ruchu na przyłączonych ścieżkach.
 
 Parametry pionowe `[spline_h]` (linijki 11–18 wpisu) ustalone z kafla Warszawa 2008: nachylenie na początku (°), nachylenie na końcu (°), różnica wysokości (m), skew na początku i na końcu, dwa parametry profilu bocznego i przesunięcie tekstury; zwykły `[spline]` jest płaski. Kierunek ruchu na ścieżce: kierunek 1 w `.sli` oraz odbicie splinu (`mirror`) odwracają go, a oba naraz się znoszą.
+
+## Edycja splinów
+
+Na mapie widać uchwyty początków (niebieskie) i końców (pomarańczowe) splinów. **Klik** zaznacza koniec splinu razem z końcami innych splinów leżącymi w tym samym miejscu (węzeł), **Shift+klik** dodaje lub odznacza; zaznaczonych może być wiele. Klawisze (kursor musi być nad mapą), Blender-owo:
+
+- **G** — przesuwanie zaznaczonych końców myszą; klik / Enter zatwierdza, Esc lub prawy przycisk anuluje. Gdy zaznaczone są oba końce splinu, spline przesuwa się sztywno; gdy jeden, drugi koniec zostaje (pozycja i azymut), a spline staje się łukiem przez nowy punkt (zmienia się azymut, długość i promień po przesuwanym końcu). Początek splinu nie może wyjść poza kafel, w którym jest zapisany.
+- **Z** — przesunięcie wysokości: ruch myszą w górę/dół (Shift — dokładniej, Ctrl — szybciej) albo wpisanie liczby (cyfry, `-`, `.`, Backspace); Enter lub klik zatwierdza. Zmiana jednego końca zmienia `z` i różnicę wysokości (drugi koniec zostaje na swojej wysokości); zwykły `[spline]` staje się wtedy `[spline_h]` (zachowując parametry profilu i przesunięcie tekstury).
+- **N** — nowy spline: od zaznaczonego końca (naprzód od końca splinu, a od początku „do tyłu”; łuk styczny, stałe nachylenie, przyłączenie prev/next tylko od wolnego końca) albo, gdy nic nie zaznaczono, od miejsca kursora (prosta, wysokość z pola „Z początku”); drugi punkt wskazuje się myszą i zatwierdza klikiem. Plik `.sli` nowego splinu to pole w panelu (domyślnie ten sam co zaznaczonego splinu). Po utworzeniu zaznaczany jest jego koniec, więc można od razu ciągnąć dalej klawiszem N.
+
+Panel pokazuje dla zaznaczonych splinów wysokość początkową i końcową (Z), różnicę, długość, promień i azymut, a na mapie przy końcach splinów są etykiety Z (z podglądem na żywo podczas G i Z). Zapisy trafiają do kafli (kopie `.map.bak`), a indeks splinów odświeża się od razu, bez przeskanowania mapy.
 
 ## Trasa kursu (.ttr)
 

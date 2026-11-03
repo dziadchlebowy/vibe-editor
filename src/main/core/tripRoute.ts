@@ -5,6 +5,7 @@ import { decodeCfg, encodeCfg, splitLines } from './globalCfg.ts';
 import { assetsDir, parseTiles, safeJoin, type TileRef } from './mapIndex.ts';
 import { loadMapStops, parseTileObjects, type RawObject } from './mapStops.ts';
 import { parseTileSplines, type RawSpline } from './mapSplines.ts';
+import { arcPoints } from '../../shared/arcs.ts';
 import { projectOnLine } from '../../shared/geo.ts';
 import { routeBases } from '../../shared/routeBases.ts';
 import { editStations, findTrackFile, listTrackFiles, parseTrip, type NewStationFields } from './timetable.ts';
@@ -16,7 +17,7 @@ import { editStations, findTrackFile, listTrackFiles, parseTrip, type NewStation
  */
 export type TrackEntry = Omit<RouteSegment, 'line'>;
 
-export { projectOnLine };
+export { arcPoints, projectOnLine };
 
 export function parseTtr(text: string): TrackEntry[] {
   const lines = splitLines(text);
@@ -120,22 +121,6 @@ export function pathBlocks(text: string): number[][] {
 // --- geometria (te same wzory co rysowanie splinów i ścieżek obiektów na mapie) -----------------------
 
 type Pt = [number, number]; // metry lokalne kafla, Y na północ
-
-/** Punkty łuku/prostej: start (x, y), azymut °, promień (0 = prosta), długość, boczne przesunięcie c. */
-export function arcPoints(x: number, y: number, hdg: number, radius: number, len: number, c: number): Pt[] {
-  const k = radius !== 0 ? 1 / radius : 0;
-  const phi0 = (hdg * Math.PI) / 180;
-  const steps = k === 0 ? 1 : Math.max(1, Math.ceil(Math.abs(len * k) / (Math.PI / 36)));
-  const pts: Pt[] = [];
-  for (let i = 0; i <= steps; i++) {
-    const s = (len * i) / steps;
-    const phi = phi0 + k * s;
-    const mx = k === 0 ? Math.sin(phi0) * s : (Math.cos(phi0) - Math.cos(phi)) / k;
-    const my = k === 0 ? Math.cos(phi0) * s : (Math.sin(phi) - Math.sin(phi0)) / k;
-    pts.push([x + mx + Math.cos(phi) * c, y + my - Math.sin(phi) * c]);
-  }
-  return pts;
-}
 
 /** Ścieżka obiektu: punkty w układzie obiektu obrócone o `rot` ° i przesunięte do pozycji (ox, oy). */
 export function objectPathPoints(p: { x: number; y: number; hdg: number; radius: number; len: number }, ox: number, oy: number, rot: number): Pt[] {

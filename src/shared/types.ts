@@ -366,6 +366,36 @@ export interface TripRoute {
   error?: string;
 }
 
+/** Koniec (początek albo koniec) splinu w edytorze splinów; `tile` = indeks kafla, w którym spline jest zapisany. */
+export interface SplinePointRef {
+  splineId: string;
+  end: 'start' | 'end';
+  tile: number;
+}
+
+/** Punkt końcowy splinu z danymi do wyświetlenia: położenie (jednostki kafli), wysokość osi, azymut w kierunku splinu i nachylenie. */
+export interface SplinePoint extends SplinePointRef {
+  x: number;
+  y: number;
+  z: number;
+  heading: number;
+  pitch: number;
+  linked: string;
+  path: string;
+}
+
+/** Zlecenie utworzenia splinu: od końca istniejącego splinu (`from`) albo od dowolnego punktu (startX, startY, startZ) do punktu końcowego. */
+export interface NewSplineReq {
+  from: SplinePointRef | null;
+  startX: number;
+  startY: number;
+  startZ: number;
+  endX: number;
+  endY: number;
+  /** Plik .sli nowego splinu (np. Splines\\invis_street.sli). */
+  sli: string;
+}
+
 /** Wskazanie węzła ścieżki: koniec (początek albo koniec) splinu i numer ścieżki ruchu w jego .sli. */
 export interface LinkNodeRef {
   splineId: string;
