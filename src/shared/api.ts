@@ -21,6 +21,7 @@ import type {
   LinkPlan,
   NewSplineReq,
   RouteSegment,
+  SplineIssue,
   SplinePoint,
   SplinePointRef,
   StationEdits,
@@ -81,6 +82,17 @@ export interface VeApi {
   createLink(a: LinkEndRef, b: LinkEndRef, reverse: boolean): Promise<OkResult & { ids?: string[] }>;
   /** Końce splinów (wraz z pokrywającymi się końcami innych splinów) najbliższe punktowi (jednostki kafli), maks. maxDistM metrów. */
   pickSplinePoints(x: number, y: number, maxDistM: number): Promise<SplinePoint[]>;
+  /** Końce splinów w prostokącie (jednostki kafli) — zaznaczanie prostokątem. */
+  pickSplinePointsInBox(x0: number, y0: number, x1: number, y1: number): Promise<SplinePoint[]>;
+  /** Kontrola spójności splinów całej mapy: przerwy, załamki azymutu/nachylenia, skoki wysokości, niesymetryczne odnośniki. */
+  checkSplines(): Promise<SplineIssue[]>;
+  /** Wyrównuje połączenie (koniec splinu A → początek splinu B): wysokość, nachylenie i skew jako średnie. */
+  alignSplines(a: SplinePointRef, b: SplinePointRef): Promise<OkResult>;
+  /** Cofa / ponawia ostatnią zmianę kafli (spliny, łączenia); zwraca nazwę operacji. */
+  undoMap(): Promise<OkResult & { label?: string }>;
+  redoMap(): Promise<OkResult & { label?: string }>;
+  /** Nazwy operacji, które można cofnąć / ponowić (null = brak). */
+  undoState(): Promise<{ undo: string | null; redo: string | null }>;
   /** Spliny wskazanych końców w metrach świata — do podglądu przesunięć w interfejsie. */
   loadEditSplines(refs: SplinePointRef[]): Promise<EditSpline[]>;
   /** Przesuwa wskazane końce splinów (dx, dy w metrach, dz — wysokość) i zapisuje kafle (kopie .map.bak). */

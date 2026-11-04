@@ -62,6 +62,9 @@ export interface SplineOverlay {
   hover: { x: number; y: number } | null;
   preview: number[][];
   labels: { x: number; y: number; text: string; bold?: boolean }[];
+  /** Prostokąt zaznaczania (jednostki kafli) i punkt przyciągania podczas przesuwania. */
+  box?: { x0: number; y0: number; x1: number; y1: number } | null;
+  snap?: { x: number; y: number } | null;
 }
 
 /** Nakładka trybu łączeń: wybrane węzły, węzeł pod kursorem i podgląd nowych splinów. */
@@ -257,6 +260,30 @@ export class MapGrid {
     this.splineMode = on;
     if (!on) this.splineOv = { selected: [], hover: null, preview: [], labels: [] };
     this.refresh();
+  }
+
+  /** Najbliższy początek/koniec splinu z indeksu (jednostki kafli) w promieniu maxDistM metrów od (x, y), poza punktami z `exclude`. */
+  endpointNear(x: number, y: number, maxDistM: number, exclude: { x: number; y: number }[]): { x: number; y: number } | null {
+    let best: { x: number; y: number } | null = null;
+    let bd = maxDistM;
+    for (const t of this.splines?.tiles ?? []) {
+      if (Math.abs(t.x - Math.round(x)) > 1 || Math.abs(t.y - Math.round(y)) > 1) continue;
+      for (const s of t.s) {
+        const [, lx, ly, hdg, len, radius] = s;
+        const k = radius !== 0 ? 1 / radius : 0;
+        const phi0 = (hdg * Math.PI) / 180;
+        const phi = phi0 + k * len;
+        const mx = k === 0 ? Math.sin(phi0) * len : (Math.cos(phi0) - Math.cos(phi)) / k;
+        const my = k === 0 ? Math.cos(phi0) * len : (Math.sin(phi) - Math.sin(phi0)) / k;
+        for (const [ex, ey] of [[lx, ly], [lx + mx, ly + my]] as const) {
+          const p = { x: t.x - 0.5 + ex / 300, y: t.y - 0.5 + ey / 300 };
+          if (exclude.some((q) => Math.hypot((q.x - p.x) * 300, (q.y - p.y) * 300) < 0.3)) continue;
+          const d = Math.hypot((p.x - x) * 300, (p.y - y) * 300);
+          if (d < bd) (bd = d, (best = p));
+        }
+      }
+    }
+    return best;
   }
 
   setSplineOverlay(o: SplineOverlay): void {
@@ -511,6 +538,23 @@ export class MapGrid {
       }
     }
     ctx.setLineDash([]);
+    if (o.box) {
+      const [bx0, by0, bx1, by1] = [this.sx(o.box.x0, w), this.sy(o.box.y0, hh), this.sx(o.box.x1, w), this.sy(o.box.y1, hh)];
+      ctx.fillStyle = 'rgba(0, 120, 215, 0.12)';
+      ctx.fillRect(Math.min(bx0, bx1), Math.min(by0, by1), Math.abs(bx1 - bx0), Math.abs(by1 - by0));
+      ctx.setLineDash([6, 4]);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#0a5fb0';
+      ctx.strokeRect(Math.min(bx0, bx1), Math.min(by0, by1), Math.abs(bx1 - bx0), Math.abs(by1 - by0));
+      ctx.setLineDash([]);
+    }
+    if (o.snap) {
+      ctx.beginPath();
+      ctx.arc(this.sx(o.snap.x, w), this.sy(o.snap.y, hh), 11, 0, Math.PI * 2);
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#d6291f';
+      ctx.stroke();
+    }
     if (o.hover) {
       ctx.beginPath();
       ctx.arc(this.sx(o.hover.x, w), this.sy(o.hover.y, hh), 9, 0, Math.PI * 2);
@@ -828,9 +872,13 @@ export class MapGrid {
 
   // --- widok ----------------------------------------------------------------
 
-  private centerOn(x: number, y: number): void {
+  /** Przesuwa widok na punkt (jednostki kafli) i w razie potrzeby przybliża do co najmniej `minScale` px na kafel. */
+  centerOn(x: number, y: number, minScale = 0): void {
     this.cx = x;
     this.cy = y;
+    if (this.scale < minScale) this.scale = Math.min(MAX_SCALE, minScale);
+    this.needFit = false;
+    this.draw();
   }
 
   private sx(wx: number, w: number): number {

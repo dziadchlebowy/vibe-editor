@@ -27,7 +27,8 @@ import { GitRunner, setupRepo, syncToRemote } from './core/git.ts';
 import { assetsDir, buildMapIndex, loadMapIndex, toCatalog, toOverview } from './core/mapIndex.ts';
 import { loadTimetable, saveLine, saveTrip } from './core/timetable.ts';
 import { createLink, pickLinkNode, planLink } from './core/pathLink.ts';
-import { applySplineEdit, createSpline, deleteSplines, loadEditSplines, pickSplinePoints, refreshSplinesIndex } from './core/splineEdit.ts';
+import { redoLast, undoLast, undoState } from './core/undo.ts';
+import { alignSplines, applySplineEdit, checkSplines, createSpline, deleteSplines, pickSplinePointsInBox, loadEditSplines, pickSplinePoints, refreshSplinesIndex } from './core/splineEdit.ts';
 import { hoverTrack, loadTripRoute, saveTripRoute } from './core/tripRoute.ts';
 import { loadMapSplines } from './core/mapSplines.ts';
 import { loadObjPaths } from './core/mapObjPaths.ts';
@@ -452,6 +453,31 @@ function registerIpc(): void {
     if (r.ok && r.tiles) afterSplineWrite(d, r.tiles);
     return r;
   });
+  ipcMain.handle('spl:box', (_e, x0: number, y0: number, x1: number, y1: number) => {
+    const d = mapDir();
+    return d && [x0, y0, x1, y1].every(Number.isFinite) ? pickSplinePointsInBox(d, x0, y0, x1, y1) : [];
+  });
+  ipcMain.handle('spl:check', () => {
+    const d = mapDir();
+    return d ? checkSplines(d) : [];
+  });
+  ipcMain.handle('spl:align', (_e, a: SplinePointRef, b: SplinePointRef) => {
+    const d = mapDir();
+    if (!d || !settings.workDir) return { ok: false, error: 'Brak skonfigurowanej mapy.' };
+    const r = alignSplines(d, a, b);
+    if (r.ok && r.tiles) afterSplineWrite(d, r.tiles);
+    return r;
+  });
+  const undoRedo = (fn: typeof undoLast) => () => {
+    const d = mapDir();
+    if (!d || !settings.workDir) return { ok: false, error: 'Brak skonfigurowanej mapy.' };
+    const r = fn();
+    if (r.ok && r.tiles) afterSplineWrite(d, r.tiles);
+    return r;
+  };
+  ipcMain.handle('map:undo', undoRedo(undoLast));
+  ipcMain.handle('map:redo', undoRedo(redoLast));
+  ipcMain.handle('map:undoState', () => undoState());
   ipcMain.handle('spl:delete', (_e, refs: SplinePointRef[]) => {
     const d = mapDir();
     if (!d || !settings.workDir || !Array.isArray(refs)) return { ok: false, error: 'Brak skonfigurowanej mapy.' };

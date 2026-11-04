@@ -384,6 +384,22 @@ export interface SplinePoint extends SplinePointRef {
   path: string;
 }
 
+/** Problem znaleziony przez kontrolę spójności splinów (połączenie koniec → początek). */
+export interface SplineIssue {
+  kind: 'gap' | 'heading' | 'height' | 'pitch' | 'skew' | 'link' | 'missing';
+  /** Wielkość odchylenia względem progu (>= 1 = problem); do sortowania. */
+  severity: number;
+  /** Koniec splinu A i początek splinu B tworzące połączenie (b = null, gdy B nie istnieje). */
+  a: SplinePointRef;
+  b: SplinePointRef | null;
+  /** Miejsce połączenia (jednostki kafli) — do przejścia na mapie. */
+  x: number;
+  y: number;
+  text: string;
+  /** Czy da się naprawić jednym kliknięciem „Wyrównaj” (wysokość, nachylenie, skew). */
+  fixable: boolean;
+}
+
 /** Zlecenie utworzenia splinu: od końca istniejącego splinu (`from`) albo od dowolnego punktu (startX, startY, startZ) do punktu końcowego. */
 export interface NewSplineReq {
   from: SplinePointRef | null;

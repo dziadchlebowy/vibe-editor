@@ -41,6 +41,22 @@ export const splineEndZ = (s: EditSpline, end: 'start' | 'end'): number => (end 
 const EPS = 1e-9;
 
 /**
+ * Wyrównuje połączenie koniec A → początek B: wysokość styku, nachylenie i skew stają się średnimi z obu stron
+ * (drugie końce splinów zostają na swoich wysokościach). Zwykły [spline] staje się [spline_h], gdy musi przechować wartości.
+ */
+export function alignJoin(a: EditSpline, b: EditSpline): { a: EditSpline; b: EditSpline } {
+  const zJoin = (a.z + a.dz + b.z) / 2;
+  const pitch = (a.pitch1 + b.pitch0) / 2;
+  const skew = (a.skew1 + b.skew0) / 2;
+  const na: EditSpline = { ...a, dz: zJoin - a.z, pitch1: pitch, skew1: skew };
+  const nb: EditSpline = { ...b, dz: b.z + b.dz - zJoin, z: zJoin, pitch0: pitch, skew0: skew };
+  for (const n of [na, nb]) {
+    if (n.kind === 'spline' && (Math.abs(n.dz) > EPS || Math.abs(n.pitch0) > EPS || Math.abs(n.pitch1) > EPS || Math.abs(n.skew0) > EPS || Math.abs(n.skew1) > EPS)) n.kind = 'spline_h';
+  }
+  return { a: na, b: nb };
+}
+
+/**
  * Przesuwa zaznaczone końce splinów o (dx, dy) metrów w poziomie i dz metrów w pionie.
  * - Oba końce splinu zaznaczone: spline przesuwa się sztywno.
  * - Jeden koniec: drugi koniec zostaje (pozycja i azymut), a spline staje się łukiem przez nowy punkt — zmienia się azymut,

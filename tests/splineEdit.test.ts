@@ -222,3 +222,97 @@ test('deleteSplines: usuwa rekord z blokami [rule], zeruje odnośniki innych spl
   assert.equal(deleteSplines(map, []).ok, false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+import { redoLast, undoLast, undoState, clearUndo } from '../src/main/core/undo.ts';
+import { alignSplines, checkSplines, pickSplinePointsInBox } from '../src/main/core/splineEdit.ts';
+
+test('cofanie i ponawianie: przywraca dokładnie bajty kafli, odmawia po zmianie z zewnątrz, nowa operacja czyści ponawianie', () => {
+  clearUndo();
+  const { dir, map } = setup();
+  const file = path.join(map, 'a.map');
+  const original = fs.readFileSync(file);
+  const refs = [{ splineId: '101', end: 'end' as const, tile: 0 }];
+  assert.equal(applySplineEdit(map, refs, 4, 0, 0).ok, true);
+  const edited = fs.readFileSync(file);
+  assert.ok(!edited.equals(original));
+  assert.deepEqual(undoState(), { undo: 'Przesunięcie punktów splinów', redo: null });
+  const u = undoLast();
+  assert.equal(u.ok, true);
+  assert.deepEqual(u.tiles, [0]);
+  assert.ok(fs.readFileSync(file).equals(original)); // bajt w bajt jak przed edycją
+  assert.equal(undoState().redo, 'Przesunięcie punktów splinów');
+  assert.equal(redoLast().ok, true);
+  assert.ok(fs.readFileSync(file).equals(edited));
+  // nowa operacja po cofnięciu czyści ponawianie
+  undoLast();
+  assert.equal(createSpline(map, { from: null, startX: (750 + 20) / 300, startY: (1050 + 200) / 300, startZ: 0, endX: (750 + 80) / 300, endY: (1050 + 200) / 300, sli: 'Splines/a.sli' }).ok, true);
+  assert.equal(undoState().redo, null);
+  assert.equal(undoState().undo, 'Nowy spline');
+  // zmiana pliku poza aplikacją blokuje cofnięcie (nie nadpisujemy cudzych zmian)
+  fs.appendFileSync(file, '\r\n');
+  const bad = undoLast();
+  assert.equal(bad.ok, false);
+  assert.match(bad.error ?? '', /zmieniony/);
+  assert.equal(undoLast().ok, false);
+  clearUndo();
+  assert.equal(undoLast().error, 'Nie ma nic do cofnięcia.');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('zaznaczanie prostokątem: końce splinów wewnątrz prostokąta (także z sąsiedniego kafla), poza — nie', () => {
+  const { dir, map } = setup();
+  const u = (m: number): number => m / 300;
+  // A: (150,0)→(150,100); B: (150,100)→(150,150); C: (220,20)→(220,20+30·) — wszystkie na kaflu (3,4): lokalne + (750, 1050)
+  const all = pickSplinePointsInBox(map, u(750 + 140), u(1050 - 10), u(750 + 160), u(1050 + 160));
+  assert.deepEqual(all.map((p) => `${p.splineId}:${p.end}`).sort(), ['101:end', '101:start', '102:end', '102:start']);
+  const mid = pickSplinePointsInBox(map, u(750 + 140), u(1050 + 90), u(750 + 160), u(1050 + 110)); // tylko węzeł 101/102
+  assert.deepEqual(mid.map((p) => `${p.splineId}:${p.end}`).sort(), ['101:end', '102:start']);
+  assert.equal(pickSplinePointsInBox(map, u(750 + 260), u(1050 + 260), u(750 + 290), u(1050 + 290)).length, 0);
+  assert.equal(pickSplinePointsInBox(map, u(750 + 160), u(1050 + 110), u(750 + 140), u(1050 + 90)).length, 2); // rogi w odwrotnej kolejności
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('kontrola spójności: wykrywa załamek nachylenia, skok wysokości i przerwę; wyrównanie usuwa wysokość/nachylenie/skew', () => {
+  clearUndo();
+  const { dir, map } = setup();
+  // setup(): A kończy się z nachyleniem 2°, a B (płaski) zaczyna się z 0° — to prawdziwy załamek nachylenia
+  let issues = checkSplines(map);
+  assert.deepEqual(issues.map((i) => i.kind), ['pitch']);
+  assert.equal(issues[0].fixable, true);
+  assert.deepEqual([issues[0].a.splineId, issues[0].a.end, issues[0].b?.splineId, issues[0].b?.end], ['101', 'end', '102', 'start']);
+  assert.ok(Math.abs(issues[0].x - (750 + 150) / 300) < 1e-9 && Math.abs(issues[0].y - (1050 + 100) / 300) < 1e-9);
+  // podnieś koniec A o 1 m (skok wysokości) i odsuń go w bok (przerwa)
+  assert.equal(applySplineEdit(map, [{ splineId: '101', end: 'end', tile: 0 }], 0.5, 0, 1).ok, true);
+  issues = checkSplines(map);
+  assert.deepEqual(issues.map((i) => i.kind).sort(), ['gap', 'heading', 'height', 'pitch']);
+  // wyrównanie: wysokość, nachylenie (i skew) — przerwa i azymut zostają (nie są naprawiane automatycznie)
+  const r = alignSplines(map, { splineId: '101', end: 'end', tile: 0 }, { splineId: '102', end: 'start', tile: 0 });
+  assert.equal(r.ok, true, r.error ?? '');
+  issues = checkSplines(map);
+  assert.deepEqual(issues.map((i) => i.kind).sort(), ['gap', 'heading']);
+  const [a, b] = parseTileSplines(fs.readFileSync(path.join(map, 'a.map'), 'utf8'));
+  assert.ok(Math.abs(a.z + a.dz - b.z) < 1e-6 && Math.abs(a.pitch1 - b.pitch0) < 1e-6 && b.kind === 'spline_h'); // płaski B zamienił się w [spline_h]
+  assert.ok(Math.abs(a.pitch1 - 1) < 1e-6); // średnia z 2° i 0°
+  assert.equal(undoState().undo, 'Wyrównanie połączenia splinów');
+  // odnośnik do nieistniejącego splinu i asymetria
+  const file = path.join(map, 'a.map');
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(rec('[spline]', 103, 0, 0, 220, 4, 20, 90, 30, 0, [0, 0, 0, 0, 0, 0, 0]), rec('[spline]', 103, 555, 0, 220, 4, 20, 90, 30, 0, [0, 0, 0, 0, 0, 0, 0])));
+  assert.ok(checkSplines(map).some((i) => i.kind === 'missing' && i.a.splineId === '103' && i.a.end === 'start' && i.b === null));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('indeks splinów po usunięciu wszystkich splinów kafla nie zostaje nieaktualny; po cofnięciu wraca', () => {
+  clearUndo();
+  const { dir, map } = setup();
+  const refs = ['101', '102', '103'].map((id) => ({ splineId: id, end: 'start' as const, tile: 0 }));
+  const d = deleteSplines(map, refs);
+  assert.equal(d.ok, true, d.error ?? '');
+  refreshSplinesIndex(dir, map, d.tiles ?? []);
+  assert.equal(loadMapSplines(dir)!.tiles.length, 0);
+  const u = undoLast();
+  assert.equal(u.ok, true);
+  refreshSplinesIndex(dir, map, u.tiles ?? []);
+  assert.equal(loadMapSplines(dir)!.tiles[0].s.length, 3);
+  clearUndo();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

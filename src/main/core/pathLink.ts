@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { angDiff, arcEnd, arcPoints, biarc, connectArcs, deg, hermite, rad, type NodePose, type PlannedArc, type Pose } from '../../shared/arcs.ts';
 import type { LinkEnd, LinkEndRef, LinkNode, LinkNodeRef, LinkPlan } from '../../shared/types.ts';
-import { decodeCfg, encodeCfg, splitLines } from './globalCfg.ts';
+import { decodeCfg, splitLines } from './globalCfg.ts';
+import { writeTiles } from './undo.ts';
 import { assetsDir, safeJoin, type TileRef } from './mapIndex.ts';
 import type { RawSpline } from './mapSplines.ts';
 import { cachedAsset, cachedTile, pathBlocks, readTiles } from './tripRoute.ts';
@@ -344,10 +345,6 @@ export function createLink(workDir: string, mapDir: string, a: LinkEndRef, b: Li
     const e = edits.get(ti)!;
     e.lines.splice(splineInsertAt(e.lines), 0, ...rec);
   }
-  for (const e of edits.values()) {
-    if (!fs.existsSync(`${e.full}.bak`)) fs.copyFileSync(e.full, `${e.full}.bak`);
-    const eol = e.dec.text.includes('\r\n') ? '\r\n' : '\n';
-    fs.writeFileSync(e.full, encodeCfg(e.lines.join(eol), e.dec.encoding, e.dec.bom));
-  }
+  writeTiles(edits, 'Łączenie ścieżek');
   return { ok: true, ids, tiles: [...edits.keys()] };
 }

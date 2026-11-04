@@ -1,8 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { NewSplineReq, SplinePoint, SplinePointRef } from '../../shared/types.ts';
-import { moveSplines, newSpline, newSplineStartAt, splineEndPose, splineEndZ, type EditSpline, type PointSel } from '../../shared/splineEdit.ts';
-import { decodeCfg, encodeCfg, splitLines } from './globalCfg.ts';
+import type { NewSplineReq, SplineIssue, SplinePoint, SplinePointRef } from '../../shared/types.ts';
+import { alignJoin, moveSplines, newSpline, newSplineStartAt, splineEndPose, splineEndZ, type EditSpline, type PointSel } from '../../shared/splineEdit.ts';
+import { angDiff } from '../../shared/arcs.ts';
+import { decodeCfg, splitLines } from './globalCfg.ts';
+import { writeTiles } from './undo.ts';
 import { assetsDir, type TileRef } from './mapIndex.ts';
 import { buildSplinesData, extentFromAssets, loadMapSplines, pathsFromAssets, splinesPath, type RawSpline } from './mapSplines.ts';
 import { fmt, maxId, setSplineLink, splineInsertAt } from './pathLink.ts';
@@ -117,12 +119,8 @@ function openTile(mapDir: string, tiles: TileRef[], ti: number, cache: Map<numbe
   return e;
 }
 
-function saveTiles(cache: Map<number, TileEdit>): void {
-  for (const e of cache.values()) {
-    if (!fs.existsSync(`${e.full}.bak`)) fs.copyFileSync(e.full, `${e.full}.bak`);
-    const eol = e.dec.text.includes('\r\n') ? '\r\n' : '\n';
-    fs.writeFileSync(e.full, encodeCfg(e.lines.join(eol), e.dec.encoding, e.dec.bom));
-  }
+function saveTiles(cache: Map<number, TileEdit>, label: string): void {
+  writeTiles(cache, label);
 }
 
 /** Nadpisuje w pliku kafla pola splinu (położenie, azymut, długość, promień, wysokość, dz); zwykły [spline] z dz ≠ 0 staje się [spline_h]. */
@@ -145,7 +143,12 @@ export function rewriteSplineRecord(lines: string[], n: EditSpline, xLocal: numb
     head.forEach((v, k) => {
       if (Math.abs(Number(lines[idx[5 + k]].trim().replace(',', '.')) - Number(v)) > 1e-9) lines[idx[5 + k]] = v;
     });
-    if (wasH && idx.length > 13 && Math.abs(Number(lines[idx[13]].trim().replace(',', '.')) - n.dz) > 1e-9) lines[idx[13]] = fmt(n.dz);
+    if (wasH && idx.length > 15) {
+      // nachylenie na początku i końcu, różnica wysokości, skew na początku i końcu
+      [n.pitch0, n.pitch1, n.dz, n.skew0, n.skew1].forEach((v, k) => {
+        if (Math.abs(Number(lines[idx[11 + k]].trim().replace(',', '.')) - v) > 1e-9) lines[idx[11 + k]] = fmt(v);
+      });
+    }
     return null;
   }
   // zwykły [spline] → [spline_h]: tail (7 liczb: cztery zera, dwa parametry profilu, przesunięcie tekstury) → 8 liczb z dz
@@ -156,11 +159,11 @@ export function rewriteSplineRecord(lines: string[], n: EditSpline, xLocal: numb
     '[spline_h]',
     ...idx.slice(0, 5).map((i) => lines[i].trim()),
     ...head,
-    '0',
-    '0',
+    fmt(n.pitch0),
+    fmt(n.pitch1),
     fmt(n.dz),
-    '0',
-    '0',
+    fmt(n.skew0),
+    fmt(n.skew1),
     nums[4],
     nums[5],
     nums[6],
@@ -193,12 +196,10 @@ export function refreshSplinesIndex(workDir: string, mapDir: string, tileIdxs: n
     }
     return i;
   });
-  for (const ft of fresh.tiles) {
-    const s = ft.s.map((t) => [mapRoad[t[0]], ...t.slice(1)]);
-    const at = data.tiles.findIndex((t) => t.x === ft.x && t.y === ft.y);
-    if (at >= 0) data.tiles[at] = { x: ft.x, y: ft.y, s };
-    else data.tiles.push({ x: ft.x, y: ft.y, s });
-  }
+  // kafle, w których po zmianie nie zostały żadne spliny (np. po usunięciu), znikają z indeksu zamiast zostać nieaktualne
+  const coords = new Set(tiles.flatMap((t, i) => (wanted.has(i) ? [`${t.x},${t.y}`] : [])));
+  data.tiles = data.tiles.filter((t) => !coords.has(`${t.x},${t.y}`));
+  for (const ft of fresh.tiles) data.tiles.push({ x: ft.x, y: ft.y, s: ft.s.map((t) => [mapRoad[t[0]], ...t.slice(1)]) });
   fs.writeFileSync(splinesPath(workDir), JSON.stringify(data));
 }
 
@@ -222,7 +223,7 @@ export function applySplineEdit(mapDir: string, refs: SplinePointRef[], dx: numb
     const err = rewriteSplineRecord(e.lines, n, xl, yl);
     if (err) return { ok: false, error: err };
   }
-  saveTiles(cache);
+  saveTiles(cache, 'Przesunięcie punktów splinów');
   return { ok: true, tiles: [...cache.keys()] };
 }
 
@@ -283,7 +284,7 @@ export function createSpline(mapDir: string, req: NewSplineReq): { ok: boolean; 
     '',
   ];
   home.lines.splice(splineInsertAt(home.lines), 0, ...rec);
-  saveTiles(cache);
+  saveTiles(cache, 'Nowy spline');
   return { ok: true, id, tiles: [...cache.keys()] };
 }
 
@@ -340,6 +341,100 @@ export function deleteSplines(mapDir: string, refs: SplinePointRef[]): { ok: boo
     });
     if (changed) cache.set(ti, edit);
   });
-  saveTiles(cache);
+  saveTiles(cache, 'Usunięcie splinów');
   return { ok: true, ids: [...ids], tiles: [...cache.keys()] };
+}
+
+/** Końce splinów (jednostki kafli) leżące w prostokącie (x0, y0)–(x1, y1) — zaznaczanie prostokątem. */
+export function pickSplinePointsInBox(mapDir: string, x0: number, y0: number, x1: number, y1: number): SplinePoint[] {
+  const tiles = readTiles(mapDir);
+  if (!tiles) return [];
+  const [minX, maxX, minY, maxY] = [Math.min(x0, x1), Math.max(x0, x1), Math.min(y0, y1), Math.max(y0, y1)];
+  const out: SplinePoint[] = [];
+  tiles.forEach((t, ti) => {
+    // spline może wystawać poza kafel, w którym jest zapisany — bierzemy kafle przylegające do prostokąta
+    if (t.x < Math.round(minX) - 1 || t.x > Math.round(maxX) + 1 || t.y < Math.round(minY) - 1 || t.y > Math.round(maxY) + 1) return;
+    for (const sp of cachedTile(path.join(mapDir, t.file))?.splines ?? []) {
+      const e = toEditSpline(sp, t, ti);
+      for (const end of ['start', 'end'] as const) {
+        const p = pointOf(e, end);
+        if (p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY && out.length < 3000) out.push(p);
+      }
+    }
+  });
+  return out;
+}
+
+/** Progi kontroli: odchylenie ≥ próg = problem. */
+const CHECK = { gap: 0.02, heading: 0.1, height: 0.002, pitch: 0.05, skew: 0.05 };
+
+/**
+ * Kontrola spójności splinów całej mapy: dla każdego odnośnika next porównuje koniec splinu A z początkiem B
+ * (przerwa, azymut, wysokość, nachylenie, skew) oraz symetrię odnośników prev/next i istnienie splinu docelowego.
+ */
+export function checkSplines(mapDir: string): SplineIssue[] {
+  const tiles = readTiles(mapDir);
+  if (!tiles) return [];
+  const all: EditSpline[] = [];
+  tiles.forEach((t, ti) => {
+    for (const sp of cachedTile(path.join(mapDir, t.file))?.splines ?? []) all.push(toEditSpline(sp, t, ti));
+  });
+  const byId = new Map<string, EditSpline>();
+  for (const s of all) if (!byId.has(s.id)) byId.set(s.id, s);
+  const issues: SplineIssue[] = [];
+  const seen = new Set<string>();
+  const ref = (s: EditSpline, end: 'start' | 'end'): SplinePointRef => ({ splineId: s.id, end, tile: s.tile });
+  const push = (i: Omit<SplineIssue, 'fixable'> & { fixable?: boolean }): void => {
+    const key = `${i.kind}:${i.a.splineId}:${i.b?.splineId ?? ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    issues.push({ fixable: false, ...i });
+  };
+  for (const a of all) {
+    if (a.next !== '0') {
+      const b = byId.get(a.next);
+      const ea = splineEndPose(a, 'end');
+      if (!b) {
+        push({ kind: 'missing', severity: 100, a: ref(a, 'end'), b: null, x: ea.x / 300, y: ea.y / 300, text: `Spline ${a.id}: koniec wskazuje spline ${a.next}, którego nie ma na mapie.` });
+        continue;
+      }
+      const sb = splineEndPose(b, 'start');
+      const gap = Math.hypot(ea.x - sb.x, ea.y - sb.y);
+      const base = { a: ref(a, 'end'), b: ref(b, 'start'), x: ea.x / 300, y: ea.y / 300 };
+      if (b.prev !== a.id) push({ ...base, kind: 'link', severity: 50, text: `Spline ${a.id} → ${b.id}: odnośniki niesymetryczne (początek ${b.id} wskazuje ${b.prev === '0' ? 'brak' : b.prev}).` });
+      const hd = angDiff(ea.heading, sb.heading);
+      const dz = Math.abs(splineEndZ(a, 'end') - splineEndZ(b, 'start'));
+      const dp = Math.abs(a.pitch1 - b.pitch0);
+      const dk = Math.abs(a.skew1 - b.skew0);
+      if (gap >= CHECK.gap) push({ ...base, kind: 'gap', severity: gap / CHECK.gap, text: `Spline ${a.id} → ${b.id}: przerwa ${gap.toFixed(3)} m między końcem a początkiem.` });
+      if (hd >= CHECK.heading) push({ ...base, kind: 'heading', severity: hd / CHECK.heading, text: `Spline ${a.id} → ${b.id}: załamek azymutu ${hd.toFixed(2)}°.` });
+      if (dz >= CHECK.height) push({ ...base, kind: 'height', severity: dz / CHECK.height, fixable: true, text: `Spline ${a.id} → ${b.id}: skok wysokości ${dz.toFixed(3)} m.` });
+      if (dp >= CHECK.pitch) push({ ...base, kind: 'pitch', severity: dp / CHECK.pitch, fixable: true, text: `Spline ${a.id} → ${b.id}: załamek nachylenia ${dp.toFixed(2)}° (${a.pitch1.toFixed(2)}° → ${b.pitch0.toFixed(2)}°).` });
+      if (dk >= CHECK.skew) push({ ...base, kind: 'skew', severity: dk / CHECK.skew, fixable: true, text: `Spline ${a.id} → ${b.id}: różnica skew ${dk.toFixed(2)}.` });
+    }
+    if (a.prev !== '0' && !byId.has(a.prev)) {
+      const sa = splineEndPose(a, 'start');
+      push({ kind: 'missing', severity: 100, a: ref(a, 'start'), b: null, x: sa.x / 300, y: sa.y / 300, text: `Spline ${a.id}: początek wskazuje spline ${a.prev}, którego nie ma na mapie.` });
+    }
+  }
+  return issues.sort((p, q) => q.severity - p.severity).slice(0, 300);
+}
+
+/** Wyrównuje połączenie koniec splinu A → początek splinu B (patrz alignJoin) i zapisuje kafle. */
+export function alignSplines(mapDir: string, a: SplinePointRef, b: SplinePointRef): { ok: boolean; error?: string; tiles?: number[] } {
+  const tiles = readTiles(mapDir);
+  if (!tiles) return { ok: false, error: 'Brak pliku global.cfg w folderze mapy.' };
+  const [sa, sb] = [loadEditSplines(mapDir, [a])[0], loadEditSplines(mapDir, [b])[0]];
+  if (!sa || !sb) return { ok: false, error: 'Nie znaleziono splinów połączenia.' };
+  const r = alignJoin(sa, sb);
+  const cache = new Map<number, TileEdit>();
+  for (const n of [r.a, r.b]) {
+    const [ox, oy] = origin(tiles[n.tile]);
+    const e = openTile(mapDir, tiles, n.tile, cache);
+    if (!e) return { ok: false, error: 'Nie ma pliku kafla splinu.' };
+    const err = rewriteSplineRecord(e.lines, n, n.x - ox, n.y - oy);
+    if (err) return { ok: false, error: err };
+  }
+  saveTiles(cache, 'Wyrównanie połączenia splinów');
+  return { ok: true, tiles: [...cache.keys()] };
 }
