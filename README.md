@@ -74,7 +74,9 @@ Na mapie widać uchwyty początków (niebieskie) i końców (pomarańczowe) spli
 
 - **G** — przesuwanie zaznaczonych końców myszą; klik / Enter zatwierdza, Esc lub prawy przycisk anuluje. Gdy zaznaczone są oba końce splinu, spline przesuwa się sztywno; gdy jeden, drugi koniec zostaje (pozycja i azymut), a spline staje się łukiem przez nowy punkt (zmienia się azymut, długość i promień po przesuwanym końcu). Początek splinu nie może wyjść poza kafel, w którym jest zapisany.
 - **Z** — przesunięcie wysokości: ruch myszą w górę/dół (Shift — dokładniej, Ctrl — szybciej) albo wpisanie liczby (cyfry, `-`, `.`, Backspace); Enter lub klik zatwierdza. Zmiana jednego końca zmienia `z` i różnicę wysokości (drugi koniec zostaje na swojej wysokości); zwykły `[spline]` staje się wtedy `[spline_h]` (zachowując parametry profilu i przesunięcie tekstury).
-- **N** — nowy spline: od zaznaczonego końca (naprzód od końca splinu, a od początku „do tyłu”; łuk styczny, stałe nachylenie, przyłączenie prev/next tylko od wolnego końca) albo, gdy nic nie zaznaczono, od miejsca kursora (prosta, wysokość z pola „Z początku”); drugi punkt wskazuje się myszą i zatwierdza klikiem. Plik `.sli` nowego splinu to pole w panelu (domyślnie ten sam co zaznaczonego splinu). Po utworzeniu zaznaczany jest jego koniec, więc można od razu ciągnąć dalej klawiszem N.
+- **Delete** — usuwa spliny, do których należą zaznaczone punkty (cały węzeł = wszystkie spliny przy nim), razem z ich blokami `[rule]`, po potwierdzeniu. Odnośniki `prev`/`next` innych splinów do usuniętych (także w sąsiednich kaflach) są zerowane. Uwaga: numery elementów na kaflu późniejszych splinów z pojazdami się przesuwają, więc wpisy `.ttr` tras, które po nich następują, trzeba sprawdzić.
+- **Alt** — przełącza **łuk / prostą**. Przy włączonym łuku (domyślnie) przesuwany koniec zagina spline (G) albo nowy spline jest łukiem stycznym do początku (N); przy prostej spline pozostaje prostą i **obraca się** wokół nieruszonego końca (zmienia się też długość). Stan widać w panelu (przycisk „Łuk (Alt)” / „Prosta (Alt)”).
+- **N** — nowy spline: od zaznaczonego końca (naprzód od końca splinu, a od początku „do tyłu”; łuk styczny, stałe nachylenie, przyłączenie prev/next tylko od wolnego końca) albo, gdy nic nie zaznaczono, od miejsca kursora (prosta, wysokość z pola „Z początku”); drugi punkt wskazuje się myszą i zatwierdza klikiem. Plik `.sli` nowego splinu wybiera się z listy rozwijanej w panelu (pliki znane z mapy plus `invis_street.sli`); po zaznaczeniu punktu lista sama ustawia się na plik jego splinu. Po utworzeniu zaznaczany jest jego koniec, więc można od razu ciągnąć dalej klawiszem N.
 
 Panel pokazuje dla zaznaczonych splinów wysokość początkową i końcową (Z), różnicę, długość, promień i azymut, a na mapie przy końcach splinów są etykiety Z (z podglądem na żywo podczas G i Z). Zapisy trafiają do kafli (kopie `.map.bak`), a indeks splinów odświeża się od razu, bez przeskanowania mapy.
 
@@ -111,3 +113,7 @@ Pinezka jest zapisana w jednostkach kafli (środek kafla (x, y) to dokładnie (x
 ## Wygląd
 
 Interfejs stylizowany na Windows XP (motyw Luna): własny pasek tytułu z przyciskami okna (okno bez natywnej ramki), pasek menu, karty jak w oknie właściwości, okna dialogowe z niebieskim paskiem i pasek stanu. Kolory i czcionki są zmiennymi CSS na początku `src/renderer/styles.css`.
+
+## Ikona
+
+Ikona programu (`assets/icon.png`, `assets/icon.ico`) to ta sama grafika co w pasku tytułu: zielony zaokrąglony kwadrat z białą ramką i literą V. Jest ikoną okna, instalatora i pliku wykonywalnego, a pasek tytułu pokazuje ten sam plik.

@@ -1509,8 +1509,10 @@ let splOp: SplOp | null = null;
 let splMouse = { x: 0, y: 0, py: 0, known: false };
 let splHover: SplinePoint | null = null;
 let splMsg = '';
-let splSli = 'Splines\\invis_street.sli';
-let splSliTouched = false;
+let splSli = 'Splines/invis_street.sli';
+/** Łuk włączony (domyślnie): przesuwany koniec zagina spline; wyłączony: spline pozostaje prostą i obraca się (przełącznik: Alt). */
+let splArc = true;
+const normSli = (p: string): string => p.replace(/\\/g, '/');
 let splStartZ = 0;
 let splPanel: HTMLElement;
 
@@ -1531,7 +1533,7 @@ const lineOf = (s: { x: number; y: number; heading: number; radius: number; leng
 /** Spliny zaznaczonych końców po zastosowaniu bieżącej operacji (podgląd); błąd, gdy przesunięcie jest niemożliwe. */
 function splPreview(): { splines: EditSpline[]; error?: string } {
   const sel = splSel.map(splRef);
-  if (splOp?.kind === 'grab') return moveSplines(splData, sel, splOp.dx * 300, splOp.dy * 300, 0);
+  if (splOp?.kind === 'grab') return moveSplines(splData, sel, splOp.dx * 300, splOp.dy * 300, 0, splArc);
   if (splOp?.kind === 'z') return moveSplines(splData, sel, 0, 0, splDz());
   return { splines: [] };
 }
@@ -1575,7 +1577,7 @@ function paintSpl(): void {
   }
   let planned: NewSplineGeom | string | null = null;
   if (splOp?.kind === 'new') {
-    planned = newSpline(splNewStart(splOp), splOp.ex * 300, splOp.ey * 300);
+    planned = newSpline(splNewStart(splOp), splOp.ex * 300, splOp.ey * 300, splArc);
     if (typeof planned !== 'string') {
       preview.push(lineOf(planned));
       addLabel(planned.x, planned.y, planned.z, true);
@@ -1641,14 +1643,14 @@ async function splConfirm(): Promise<void> {
   const refs = splSel.map(splRef);
   let res: { ok: boolean; error?: string; id?: string; tiles?: number[] };
   if (op.kind === 'new') {
-    res = await ve.createSpline({ from: op.from ? splRef(op.from) : null, startX: op.sx, startY: op.sy, startZ: splStartZ, endX: op.ex, endY: op.ey, sli: splSli });
+    res = await ve.createSpline({ from: op.from ? splRef(op.from) : null, startX: op.sx, startY: op.sy, startZ: splStartZ, endX: op.ex, endY: op.ey, sli: splSli, arc: splArc });
   } else {
     const pv = splPreview();
     if (pv.error) {
       splMsg = pv.error;
       return paintSpl();
     }
-    res = op.kind === 'grab' ? await ve.applySplineEdit(refs, op.dx * 300, op.dy * 300, 0) : await ve.applySplineEdit(refs, 0, 0, splDz());
+    res = op.kind === 'grab' ? await ve.applySplineEdit(refs, op.dx * 300, op.dy * 300, 0, splArc) : await ve.applySplineEdit(refs, 0, 0, splDz(), true);
   }
   splOp = null;
   if (!res.ok) {
@@ -1662,6 +1664,7 @@ async function splConfirm(): Promise<void> {
     splData = created;
     splSel = created.length ? [splPointFrom(created, { splineId: res.id, end: 'end', tile, x: 0, y: 0, z: 0, heading: 0, pitch: 0, linked: '0', path: splSli })] : [];
     splMsg = `Utworzono spline ${res.id}.`;
+    if (created[0]) splSli = normSli(created[0].path);
   } else {
     splData = await ve.loadEditSplines(refs);
     splSel = splSel.map((p) => splPointFrom(splData, p));
@@ -1686,7 +1689,7 @@ async function onSplClick(c: SplinePointer): Promise<void> {
     splSel = pts;
   }
   splData = splSel.length > 0 ? await ve.loadEditSplines(splSel.map(splRef)) : [];
-  if (!splSliTouched && splSel.length === 1) splSli = splSel[0].path.replace(/\//g, '\\');
+  if (splSel.length > 0) splSli = normSli(splSel[0].path); // lista rozwijana pokazuje plik .sli zaznaczonego splinu
   paintSpl();
 }
 
@@ -1733,9 +1736,43 @@ async function runSplHover(): Promise<void> {
   }
 }
 
+/** Usuwa spliny zaznaczonych końców (z ich blokami [rule]) po potwierdzeniu; odnośniki innych splinów do nich są zerowane. */
+async function splDelete(): Promise<void> {
+  if (splSel.length === 0) {
+    splMsg = 'Najpierw zaznacz punkt (koniec splinu), który chcesz usunąć.';
+    return paintSpl();
+  }
+  const ids = [...new Set(splSel.map((p) => p.splineId))];
+  const ok = window.confirm(
+    `Usunąć ${ids.length === 1 ? 'spline' : `${ids.length} spliny`} ${ids.join(', ')} przypięte do zaznaczonych punktów?\n\nKafel zostanie zapisany z kopią .map.bak. Uwaga: numery elementów na kaflu późniejszych splinów się przesuną, więc wpisy .ttr tras, które z nich korzystają, trzeba potem sprawdzić (pasek informacji w trybie „Trasy kursów” pokaże niezgodności).`,
+  );
+  if (!ok) return;
+  const res = await ve.deleteSplines(splSel.map(splRef));
+  if (!res.ok) {
+    splMsg = res.error ?? 'Nie udało się usunąć splinów.';
+    return paintSpl();
+  }
+  splSel = [];
+  splData = [];
+  splHover = null;
+  splMsg = `Usunięto ${ids.length === 1 ? 'spline' : 'spliny'} ${ids.join(', ')}.`;
+  paintSpl();
+}
+
 /** Klawisze trybu: G przesuń, Z wysokość, N nowy spline, Enter zatwierdź, Esc anuluj / wyczyść zaznaczenie; w Z cyfry wpisują wartość. */
 function onSplKey(e: KeyboardEvent): boolean {
   const k = e.key.toLowerCase();
+  if (e.key === 'Alt') {
+    if (!e.repeat) {
+      splArc = !splArc;
+      paintSpl();
+    }
+    return true;
+  }
+  if (e.key === 'Delete' && !splOp) {
+    void splDelete();
+    return true;
+  }
   if (splOp?.kind === 'z' && !e.ctrlKey && !e.metaKey && !e.altKey && (/^[0-9.,-]$/.test(e.key) || e.key === 'Backspace')) {
     splOp.typed = e.key === 'Backspace' ? splOp.typed.slice(0, -1) : splOp.typed + e.key;
     paintSpl();
@@ -1777,6 +1814,8 @@ function renderSplPanel(state: EditSpline[], error: string | undefined, planned:
       { class: 'lk-node' },
       key('Klik', 'zaznacz koniec splinu (razem z pokrywającymi się końcami innych splinów); Shift — dodaj lub odznacz'),
       key('G', 'przesuń zaznaczone końce myszą'),
+      key('Delete', 'usuń zaznaczone punkty wraz z podpiętymi splinami (z potwierdzeniem)'),
+      key('Alt', `przełącz łuk / prostą (teraz: ${splArc ? 'łuk — przesuwany koniec zagina spline' : 'prosta — spline się obraca'})`),
       key('Z', 'zmień wysokość: ruch myszą w górę/dół (Shift dokładniej, Ctrl szybciej) albo wpisz liczbę'),
       key('N', 'nowy spline: od zaznaczonego końca (albo od kursora), potem wskaż punkt końcowy'),
       key('Klik / Enter · Esc / prawy przycisk', 'zatwierdź · anuluj'),
@@ -1813,12 +1852,17 @@ function renderSplPanel(state: EditSpline[], error: string | undefined, planned:
     });
     body.append(h('div', { class: 'lk-meta' }, `Zaznaczone końce: ${splSel.length}, spliny: ${state.length} (● zaznaczony koniec)`), ...rows);
   }
-  if (splMsg) body.append(h('div', { class: splMsg.startsWith('Utworzono') || splMsg.startsWith('Przesunięto') || splMsg.startsWith('Zmieniono') ? 'lk-ok' : 'lk-err' }, splMsg));
-  const sli = h('input', { type: 'text', class: 'lk-text', title: 'Plik .sli nowego splinu (domyślnie taki jak zaznaczonego splinu)' }) as HTMLInputElement;
-  sli.value = splSli;
+  if (splMsg) body.append(h('div', { class: splMsg.startsWith('Utworzono') || splMsg.startsWith('Przesunięto') || splMsg.startsWith('Zmieniono') || splMsg.startsWith('Usunięto') ? 'lk-ok' : 'lk-err' }, splMsg));
+  const sli = h('select', { class: 'lk-text', title: 'Plik .sli nowego splinu; przy zaznaczeniu punktu ustawia się na plik jego splinu' }) as HTMLSelectElement;
+  const known = new Map<string, string>();
+  for (const p of ['Splines/invis_street.sli', ...(splinesData?.roads ?? []).map((r) => r.p), splSli]) known.set(normSli(p).toLowerCase(), normSli(p));
+  for (const p of [...known.values()].sort((x, y) => x.localeCompare(y, 'pl'))) {
+    const o = h('option', { value: p, title: p }, p.replace(/^Splines\//i, '')) as HTMLOptionElement;
+    o.selected = p.toLowerCase() === normSli(splSli).toLowerCase();
+    sli.append(o);
+  }
   sli.addEventListener('change', () => {
     splSli = sli.value;
-    splSliTouched = true;
   });
   const z = h('input', { type: 'number', step: '0.1', class: 'lk-num', title: 'Wysokość osi początku nowego splinu, gdy zaczyna się w dowolnym punkcie' }) as HTMLInputElement;
   z.value = String(splStartZ);
@@ -1831,7 +1875,7 @@ function renderSplPanel(state: EditSpline[], error: string | undefined, planned:
   splPanel.append(
     h('div', { class: 'rt-title' }, '✏️ Edycja splinów'),
     body,
-    h('label', { class: 'lk-field' }, h('span', { class: 'lk-k' }, 'Nowy spline (.sli): '), sli),
+    h('label', { class: 'lk-field' }, h('span', { class: 'lk-k' }, 'Spline (.sli): '), sli),
     h('label', { class: 'lk-field' }, h('span', { class: 'lk-k' }, 'Z początku (bez zaznaczonego końca): '), z, ' m'),
     h(
       'div',
@@ -1840,6 +1884,8 @@ function renderSplPanel(state: EditSpline[], error: string | undefined, planned:
       routeButton('Z Wysokość', 'Zmień wysokość zaznaczonych końców (Z)', () => splBegin('z'), active),
       routeButton('N Nowy spline', 'Utwórz spline od zaznaczonego końca albo od kursora (N)', () => splBegin('new'), active),
       routeButton('Wyczyść', 'Odznacz wszystko (Esc)', () => ((splSel = []), (splData = []), (splMsg = ''), paintSpl()), active),
+      routeButton('Del Usuń', 'Usuń zaznaczone punkty wraz z podpiętymi splinami (Delete)', () => void splDelete(), active || splSel.length === 0),
+      routeButton(splArc ? '⌒ Łuk (Alt)' : '— Prosta (Alt)', 'Przełącz łuk / prostą: przy prostej przesuwany koniec obraca spline zamiast go zaginać (Alt)', () => ((splArc = !splArc), paintSpl())),
     ),
   );
   const nb = splPanel.querySelector('.lk-body');
@@ -1912,6 +1958,10 @@ function mountMapTab(): void {
     else if (e.key === 'Escape') setRouteEditing(false);
     else return;
     e.preventDefault();
+  });
+  document.addEventListener('keyup', (e) => {
+    // sam Alt nie powinien aktywować menu systemowego w trybie edycji splinów
+    if (e.key === 'Alt' && activeTab === 'map' && mapMode === 'splines') e.preventDefault();
   });
   void fillRouteSelect();
 

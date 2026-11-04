@@ -1,5 +1,7 @@
 import { arcEnd, connectArcs, deg, rad } from './arcs.ts';
 
+const bearing = (dx: number, dy: number): number => deg(Math.atan2(dx, dy));
+
 /** Spline do edycji w metrach świata (położenie = początek kafla + współrzędne lokalne); `tile` = indeks kafla, w którym jest zapisany. */
 export interface EditSpline {
   id: string;
@@ -44,9 +46,10 @@ const EPS = 1e-9;
  * - Jeden koniec: drugi koniec zostaje (pozycja i azymut), a spline staje się łukiem przez nowy punkt — zmienia się azymut,
  *   długość i promień po przesuwanym końcu.
  * - Wysokość: jeden koniec zmienia z i dz (drugi koniec zostaje na swojej wysokości); zwykły [spline] zamienia się wtedy w [spline_h].
+ * - Łuk wyłączony (`arc` = false): spline pozostaje prostą — obraca się wokół nieruszonego końca i zmienia długość, zamiast się zaginać.
  * Zwraca tylko zmienione spliny (te, których koniec jest zaznaczony) albo błąd.
  */
-export function moveSplines(splines: EditSpline[], sel: PointSel[], dx: number, dy: number, dz: number): { splines: EditSpline[]; error?: string } {
+export function moveSplines(splines: EditSpline[], sel: PointSel[], dx: number, dy: number, dz: number, arc = true): { splines: EditSpline[]; error?: string } {
   const has = (id: string, end: 'start' | 'end'): boolean => sel.some((p) => p.splineId === id && p.end === end);
   const out: EditSpline[] = [];
   for (const s of splines) {
@@ -59,12 +62,20 @@ export function moveSplines(splines: EditSpline[], sel: PointSel[], dx: number, 
       n.y += dy;
     } else if (Math.abs(dx) > EPS || Math.abs(dy) > EPS) {
       const e = splineEndPose(s, 'end');
-      const flat = { z: 0, pitch: 0, skew: 0 };
-      const arcs = ms
-        ? connectArcs({ x: s.x + dx, y: s.y + dy, ...flat }, { x: e.x, y: e.y, heading: e.heading, ...flat })
-        : connectArcs({ x: s.x, y: s.y, heading: s.heading, ...flat }, { x: e.x + dx, y: e.y + dy, ...flat });
-      if (typeof arcs === 'string') return { splines: [], error: `Spline ${s.id}: ${arcs}` };
-      n = { ...n, x: arcs[0].x, y: arcs[0].y, heading: arcs[0].heading, length: arcs[0].length, radius: arcs[0].radius };
+      if (!arc) {
+        // prosta między nieruszonym końcem a nowym punktem: spline obraca się wokół nieruszonego końca
+        const [ax, ay, bx, by] = ms ? [s.x + dx, s.y + dy, e.x, e.y] : [s.x, s.y, e.x + dx, e.y + dy];
+        const len = Math.hypot(bx - ax, by - ay);
+        if (len < 0.05) return { splines: [], error: `Spline ${s.id}: końce leżałyby w tym samym miejscu.` };
+        n = { ...n, x: ax, y: ay, heading: bearing(bx - ax, by - ay), length: len, radius: 0 };
+      } else {
+        const flat = { z: 0, pitch: 0, skew: 0 };
+        const arcs = ms
+          ? connectArcs({ x: s.x + dx, y: s.y + dy, ...flat }, { x: e.x, y: e.y, heading: e.heading, ...flat })
+          : connectArcs({ x: s.x, y: s.y, heading: s.heading, ...flat }, { x: e.x + dx, y: e.y + dy, ...flat });
+        if (typeof arcs === 'string') return { splines: [], error: `Spline ${s.id}: ${arcs}` };
+        n = { ...n, x: arcs[0].x, y: arcs[0].y, heading: arcs[0].heading, length: arcs[0].length, radius: arcs[0].radius };
+      }
     }
     if (Math.abs(dz) > EPS) {
       if (ms && me) n.z += dz;
@@ -113,18 +124,18 @@ export interface NewSplineGeom {
 
 /**
  * Nowy spline od `start` do punktu (ex, ey): z azymutem początku — jeden łuk styczny do niego (nachylenie stałe, jak na
- * początku), bez azymutu — prosta. Wysokość osi na początku = start.z.
+ * początku), bez azymutu albo przy wyłączonym łuku (`arc` = false) — prosta. Wysokość osi na początku = start.z.
  */
-export function newSpline(start: NewSplineStart, ex: number, ey: number): NewSplineGeom | string {
+export function newSpline(start: NewSplineStart, ex: number, ey: number, arc = true): NewSplineGeom | string {
   const dist = Math.hypot(ex - start.x, ey - start.y);
   if (dist < 0.05) return 'Punkt końcowy leży w miejscu początku.';
   let g: { heading: number; length: number; radius: number };
-  if (typeof start.heading === 'number') {
+  if (arc && typeof start.heading === 'number') {
     const arcs = connectArcs({ x: start.x, y: start.y, heading: start.heading, z: 0, pitch: 0, skew: 0 }, { x: ex, y: ey, z: 0, pitch: 0, skew: 0 });
     if (typeof arcs === 'string') return arcs;
     g = { heading: arcs[0].heading, length: arcs[0].length, radius: arcs[0].radius };
   } else {
-    g = { heading: deg(Math.atan2(ex - start.x, ey - start.y)), length: dist, radius: 0 };
+    g = { heading: bearing(ex - start.x, ey - start.y), length: dist, radius: 0 };
   }
   const pitch = start.pitch ?? 0;
   return { x: start.x, y: start.y, ...g, z: start.z, dz: g.length * Math.tan(rad(pitch)), pitch0: pitch, pitch1: pitch };

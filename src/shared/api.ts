@@ -84,7 +84,9 @@ export interface VeApi {
   /** Spliny wskazanych końców w metrach świata — do podglądu przesunięć w interfejsie. */
   loadEditSplines(refs: SplinePointRef[]): Promise<EditSpline[]>;
   /** Przesuwa wskazane końce splinów (dx, dy w metrach, dz — wysokość) i zapisuje kafle (kopie .map.bak). */
-  applySplineEdit(refs: SplinePointRef[], dx: number, dy: number, dz: number): Promise<OkResult>;
+  applySplineEdit(refs: SplinePointRef[], dx: number, dy: number, dz: number, arc: boolean): Promise<OkResult>;
+  /** Usuwa spliny, do których należą wskazane końce (wraz z ich blokami [rule]) i czyści odnośniki prev/next innych splinów do nich (kopie .map.bak). */
+  deleteSplines(refs: SplinePointRef[]): Promise<OkResult & { ids?: string[] }>;
   /** Tworzy nowy spline i zapisuje go do kafla (przyłącza do wolnego końca splinu źródłowego). */
   createSpline(req: NewSplineReq): Promise<OkResult & { id?: string }>;
   /** Zapisuje trasę kursu do pliku .ttr (tworzy go, jeśli go nie ma; pierwszy zapis robi kopię .ttr.bak) i zmiany przystanków do .ttp (kopia .ttp.bak). */

@@ -392,8 +392,10 @@ export interface NewSplineReq {
   startZ: number;
   endX: number;
   endY: number;
-  /** Plik .sli nowego splinu (np. Splines\\invis_street.sli). */
+  /** Plik .sli nowego splinu (np. Splines/invis_street.sli). */
   sli: string;
+  /** Łuk styczny do początku (domyślnie) albo prosta (false). */
+  arc?: boolean;
 }
 
 /** Wskazanie węzła ścieżki: koniec (początek albo koniec) splinu i numer ścieżki ruchu w jego .sli. */

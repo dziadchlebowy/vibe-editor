@@ -513,15 +513,10 @@ body { border: 3px solid var(--xp-frame); border-top: 0; background: var(--bg); 
 
 .topbar { -webkit-app-region: drag; user-select: none; height: 30px; padding: 0 5px 0 6px; gap: 6px; border-bottom: 0; }
 .app-icon {
+  /* ta sama grafika co ikona okna i programu (assets/icon.png) */
   width: 16px;
   height: 16px;
-  border-radius: 3px;
-  background: radial-gradient(circle at 30% 25%, #b9f08a 0, #3fae2a 55%, #1b6f12 100%);
-  border: 1px solid #fff;
-  color: #fff;
-  font: bold 11px/14px var(--font-title);
-  text-align: center;
-  text-shadow: 1px 1px #0a4a06;
+  display: block;
 }
 .winctl { display: flex; gap: 2px; margin-left: auto; -webkit-app-region: no-drag; }
 

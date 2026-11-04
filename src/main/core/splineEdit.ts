@@ -203,12 +203,12 @@ export function refreshSplinesIndex(workDir: string, mapDir: string, tileIdxs: n
 }
 
 /** Przesuwa zaznaczone końce splinów (patrz moveSplines) i zapisuje kafle; zwraca indeksy zmienionych kafli. */
-export function applySplineEdit(mapDir: string, refs: SplinePointRef[], dx: number, dy: number, dz: number): { ok: boolean; error?: string; tiles?: number[] } {
+export function applySplineEdit(mapDir: string, refs: SplinePointRef[], dx: number, dy: number, dz: number, arc = true): { ok: boolean; error?: string; tiles?: number[] } {
   const tiles = readTiles(mapDir);
   if (!tiles) return { ok: false, error: 'Brak pliku global.cfg w folderze mapy.' };
   if (![dx, dy, dz].every(Number.isFinite)) return { ok: false, error: 'Nieprawidłowe przesunięcie.' };
   const sel: PointSel[] = refs.map((r) => ({ splineId: r.splineId, end: r.end }));
-  const res = moveSplines(loadEditSplines(mapDir, refs), sel, dx, dy, dz);
+  const res = moveSplines(loadEditSplines(mapDir, refs), sel, dx, dy, dz, arc);
   if (res.error) return { ok: false, error: res.error };
   if (res.splines.length === 0) return { ok: false, error: 'Nie znaleziono zaznaczonych splinów.' };
   const cache = new Map<number, TileEdit>();
@@ -241,7 +241,7 @@ export function createSpline(mapDir: string, req: NewSplineReq): { ok: boolean; 
     if (!source) return { ok: false, error: 'Nie znaleziono splinu, od którego zaczyna się nowy.' };
     start = newSplineStartAt(source, req.from.end);
   }
-  const g = newSpline(start, req.endX * 300, req.endY * 300);
+  const g = newSpline(start, req.endX * 300, req.endY * 300, req.arc !== false);
   if (typeof g === 'string') return { ok: false, error: g };
 
   const tx = Math.floor(g.x / 300 + 0.5);
@@ -285,4 +285,61 @@ export function createSpline(mapDir: string, req: NewSplineReq): { ok: boolean; 
   home.lines.splice(splineInsertAt(home.lines), 0, ...rec);
   saveTiles(cache);
   return { ok: true, id, tiles: [...cache.keys()] };
+}
+
+/** Zakres linii rekordu splinu w pliku kafla: od znacznika do pierwszego znacznika innego niż [rule] (bloki [rule] należą do splinu). */
+function recordRange(lines: string[], id: string): [number, number] | null {
+  const m = lines.findIndex((l, i) => {
+    const t = l.trim().toLowerCase();
+    return (t === '[spline]' || t === '[spline_h]') && (lines[i + 3] ?? '').trim() === id;
+  });
+  if (m < 0) return null;
+  let e = m + 1;
+  for (; e < lines.length; e++) {
+    const t = lines[e].trim();
+    if (t.startsWith('[') && t.toLowerCase() !== '[rule]') break;
+  }
+  return [m, e];
+}
+
+/**
+ * Usuwa spliny, do których należą wskazane końce (razem z ich blokami [rule]), i zeruje odnośniki prev/next innych
+ * splinów (w każdym kaflu mapy) wskazujące na usunięte. Usunięcie przesuwa numery elementów na kaflu późniejszych
+ * splinów z pojazdami — wpisy .ttr tras, które po nich następują, trzeba potem sprawdzić.
+ */
+export function deleteSplines(mapDir: string, refs: SplinePointRef[]): { ok: boolean; error?: string; ids?: string[]; tiles?: number[] } {
+  const tiles = readTiles(mapDir);
+  if (!tiles) return { ok: false, error: 'Brak pliku global.cfg w folderze mapy.' };
+  const targets = [...new Map(refs.map((r) => [`${r.tile}:${r.splineId}`, r])).values()];
+  if (targets.length === 0) return { ok: false, error: 'Nie wskazano splinów do usunięcia.' };
+  const ids = new Set(targets.map((r) => r.splineId));
+  const cache = new Map<number, TileEdit>();
+  for (const r of targets) {
+    if (!tiles[r.tile]) return { ok: false, error: 'Nieprawidłowy kafel splinu.' };
+    const e = openTile(mapDir, tiles, r.tile, cache);
+    const range = e ? recordRange(e.lines, r.splineId) : null;
+    if (!e || !range) return { ok: false, error: `Nie znaleziono splinu ${r.splineId} w pliku kafla.` };
+    e.lines.splice(range[0], range[1] - range[0]);
+  }
+  // odnośniki innych splinów do usuniętych: w całej mapie (spline może łączyć się przez granicę kafla)
+  tiles.forEach((t, ti) => {
+    const e = cache.get(ti) ?? (fs.existsSync(path.join(mapDir, t.file)) ? null : undefined);
+    if (e === undefined) return;
+    const edit = e ?? openTile(mapDir, tiles, ti, new Map());
+    if (!edit) return;
+    let changed = false;
+    edit.lines.forEach((l, i) => {
+      const m = l.trim().toLowerCase();
+      if (m !== '[spline]' && m !== '[spline_h]') return;
+      for (const off of [4, 5]) {
+        if (ids.has((edit.lines[i + off] ?? '').trim())) {
+          edit.lines[i + off] = '0';
+          changed = true;
+        }
+      }
+    });
+    if (changed) cache.set(ti, edit);
+  });
+  saveTiles(cache);
+  return { ok: true, ids: [...ids], tiles: [...cache.keys()] };
 }

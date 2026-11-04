@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { arcEnd } from '../src/shared/arcs.ts';
 import { moveSplines, newSpline, newSplineStartAt, splineEndPose, splineEndZ, type EditSpline } from '../src/shared/splineEdit.ts';
 import { parseTileSplines, buildSplinesData, loadMapSplines, splinesPath } from '../src/main/core/mapSplines.ts';
-import { applySplineEdit, createSpline, loadEditSplines, pickSplinePoints, refreshSplinesIndex, rewriteSplineRecord } from '../src/main/core/splineEdit.ts';
+import { applySplineEdit, createSpline, deleteSplines, loadEditSplines, pickSplinePoints, refreshSplinesIndex, rewriteSplineRecord } from '../src/main/core/splineEdit.ts';
 
 const NL = '\r\n';
 const angDiff = (a: number, b: number): number => Math.abs(((((a - b) % 360) + 540) % 360) - 180);
@@ -158,5 +158,67 @@ test('createSpline: od końca splinu przyłącza next/prev, od dowolnego punktu 
   assert.equal(idx.tiles[0].s.length, 5);
   assert.ok(idx.roads.some((rd) => rd.p.toLowerCase().includes('b.sli')));
   assert.equal(loadEditSplines(map, [{ splineId: '778', end: 'end', tile: 0 }])[0].id, '778');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('łuk wyłączony: przesuwany koniec obraca spline (prosta, zmienia się długość), zamiast go zaginać; oba końce — sztywno bez zmian', () => {
+  const curved: EditSpline = { ...base, radius: 80 };
+  // koniec przesunięty o (20, 0): prosta od nieruszonego początku do nowego końca
+  const end = moveSplines([curved], [{ splineId: 'A', end: 'end' }], 20, 0, 0, false).splines[0];
+  const e = splineEndPose(end, 'end');
+  const endOld = splineEndPose(curved, 'end');
+  assert.ok(end.radius === 0 && end.x === 100 && end.y === 200);
+  assert.ok(Math.hypot(e.x - (endOld.x + 20), e.y - endOld.y) < 1e-6);
+  assert.ok(Math.abs(end.length - Math.hypot(endOld.x + 20 - 100, endOld.y - 200)) < 1e-6);
+  // początek przesunięty: prosta od nowego początku do nieruszonego końca
+  const st = moveSplines([base], [{ splineId: 'A', end: 'start' }], -15, 30, 0, false).splines[0];
+  const e2 = splineEndPose(st, 'end');
+  assert.ok(st.radius === 0 && Math.hypot(e2.x - 100, e2.y - 300) < 1e-6 && st.x === 85 && st.y === 230);
+  // oba końce: wciąż przesunięcie sztywne, łuk zostaje łukiem
+  const both = moveSplines([curved], [{ splineId: 'A', end: 'start' }, { splineId: 'A', end: 'end' }], 5, 5, 0, false).splines[0];
+  assert.ok(both.radius === 80 && both.length === 100);
+  // koniec w miejscu początku — błąd
+  assert.equal(typeof moveSplines([base], [{ splineId: 'A', end: 'end' }], 0, -100, 0, false).error, 'string');
+  // nowy spline od zaznaczonego końca przy wyłączonym łuku: prosta wprost do punktu, nachylenie zachowane
+  const g = newSpline(newSplineStartAt(base, 'end'), 160, 380, false);
+  assert.ok(typeof g !== 'string' && g.radius === 0 && g.pitch0 === 2 && Math.abs(g.length - Math.hypot(60, 80)) < 1e-9);
+  assert.ok(Math.abs(g.heading - Math.atan2(60, 80) * (180 / Math.PI)) < 1e-9);
+});
+
+test('applySplineEdit z wyłączonym łukiem zapisuje prostą (promień 0); createSpline z arc:false też', () => {
+  const { dir, map } = setup();
+  const r = applySplineEdit(map, [{ splineId: '101', end: 'end', tile: 0 }], 10, 0, 0, false);
+  assert.equal(r.ok, true, r.error ?? '');
+  const a = parseTileSplines(fs.readFileSync(path.join(map, 'a.map'), 'utf8'))[0];
+  assert.equal(a.radius, 0);
+  assert.ok(Math.abs(a.length - Math.hypot(10, 100)) < 1e-4);
+  const c = createSpline(map, { from: { splineId: '103', end: 'end', tile: 0 }, startX: 0, startY: 0, startZ: 0, endX: (750 + 280) / 300, endY: (1050 + 60) / 300, sli: 'Splines/a.sli', arc: false });
+  assert.equal(c.ok, true, c.error ?? '');
+  const n = parseTileSplines(fs.readFileSync(path.join(map, 'a.map'), 'utf8')).pop()!;
+  assert.equal(n.radius, 0);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('deleteSplines: usuwa rekord z blokami [rule], zeruje odnośniki innych splinów (także z innego kafla), robi .bak', () => {
+  const { dir, map } = setup();
+  // dopisz [rule] za splinem 102 i drugi kafel ze splinem odsyłającym do 102
+  const file = path.join(map, 'a.map');
+  const text = fs.readFileSync(file, 'utf8').replace(rec('[spline]', 102, 101, 0, 150, 13, 100, 0, 50, 0, [0, 0, 0, 0, 0, 0, 0]), rec('[spline]', 102, 101, 0, 150, 13, 100, 0, 50, 0, [0, 0, 0, 0, 0, 0, 0]) + NL + ['[rule]', '0', 'no_cars', '0', ''].join(NL));
+  fs.writeFileSync(file, text);
+  fs.writeFileSync(path.join(map, 'global.cfg'), ['[map]', '3', '4', 'a.map', '[map]', '4', '4', 'b.map', ''].join(NL));
+  fs.writeFileSync(path.join(map, 'b.map'), ['[version]', '1', '', rec('[spline]', 300, 102, 0, 5, 13, 5, 0, 20, 0, [0, 0, 0, 0, 0, 0, 0])].join(NL));
+  const r = deleteSplines(map, [{ splineId: '102', end: 'start', tile: 0 }, { splineId: '102', end: 'end', tile: 0 }]);
+  assert.equal(r.ok, true, r.error ?? '');
+  assert.deepEqual(r.ids, ['102']);
+  const a = fs.readFileSync(file, 'utf8');
+  const sp = parseTileSplines(a);
+  assert.deepEqual(sp.map((x) => x.id), ['101', '103']);
+  assert.equal(sp[0].next, '0'); // 101 wskazywał na 102
+  assert.ok(!a.includes('no_cars') && a.includes('[object]')); // blok [rule] usunięty razem ze splinem, obiekty zostają
+  const b = parseTileSplines(fs.readFileSync(path.join(map, 'b.map'), 'utf8'));
+  assert.equal(b[0].prev, '0'); // odnośnik z innego kafla wyzerowany
+  assert.ok(fs.existsSync(`${file}.bak`) && fs.existsSync(path.join(map, 'b.map.bak')));
+  assert.equal(deleteSplines(map, [{ splineId: '102', end: 'end', tile: 0 }]).ok, false); // już nie istnieje
+  assert.equal(deleteSplines(map, []).ok, false);
   fs.rmSync(dir, { recursive: true, force: true });
 });

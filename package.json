@@ -22,12 +22,14 @@
   "build": {
     "appId": "pl.dziadchlebowy.vibeeditor",
     "productName": "VibeEditor",
+    "icon": "assets/icon.ico",
     "files": [
       "dist/**/*",
       "package.json"
     ],
     "win": {
       "target": "nsis",
+      "icon": "assets/icon.ico",
       "requestedExecutionLevel": "requireAdministrator"
     }
   }

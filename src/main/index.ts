@@ -27,7 +27,7 @@ import { GitRunner, setupRepo, syncToRemote } from './core/git.ts';
 import { assetsDir, buildMapIndex, loadMapIndex, toCatalog, toOverview } from './core/mapIndex.ts';
 import { loadTimetable, saveLine, saveTrip } from './core/timetable.ts';
 import { createLink, pickLinkNode, planLink } from './core/pathLink.ts';
-import { applySplineEdit, createSpline, loadEditSplines, pickSplinePoints, refreshSplinesIndex } from './core/splineEdit.ts';
+import { applySplineEdit, createSpline, deleteSplines, loadEditSplines, pickSplinePoints, refreshSplinesIndex } from './core/splineEdit.ts';
 import { hoverTrack, loadTripRoute, saveTripRoute } from './core/tripRoute.ts';
 import { loadMapSplines } from './core/mapSplines.ts';
 import { loadObjPaths } from './core/mapObjPaths.ts';
@@ -263,6 +263,7 @@ function createWindow(): void {
     minHeight: 560,
     backgroundColor: '#ece9d8',
     title: 'VibeEditor',
+    icon: path.join(__dirname, '..', 'renderer', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     frame: false, // pasek tytułu rysuje interfejs (motyw Windows XP)
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -444,10 +445,17 @@ function registerIpc(): void {
     const d = mapDir();
     return d && Array.isArray(refs) ? loadEditSplines(d, refs) : [];
   });
-  ipcMain.handle('spl:apply', (_e, refs: SplinePointRef[], dx: number, dy: number, dz: number) => {
+  ipcMain.handle('spl:apply', (_e, refs: SplinePointRef[], dx: number, dy: number, dz: number, arc: boolean) => {
     const d = mapDir();
     if (!d || !settings.workDir || !Array.isArray(refs)) return { ok: false, error: 'Brak skonfigurowanej mapy.' };
-    const r = applySplineEdit(d, refs, dx, dy, dz);
+    const r = applySplineEdit(d, refs, dx, dy, dz, arc !== false);
+    if (r.ok && r.tiles) afterSplineWrite(d, r.tiles);
+    return r;
+  });
+  ipcMain.handle('spl:delete', (_e, refs: SplinePointRef[]) => {
+    const d = mapDir();
+    if (!d || !settings.workDir || !Array.isArray(refs)) return { ok: false, error: 'Brak skonfigurowanej mapy.' };
+    const r = deleteSplines(d, refs);
     if (r.ok && r.tiles) afterSplineWrite(d, r.tiles);
     return r;
   });
