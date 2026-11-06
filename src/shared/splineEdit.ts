@@ -1,4 +1,4 @@
-import { arcEnd, connectArcs, deg, rad } from './arcs.ts';
+import { angDelta, arcEnd, connectArcs, deg, rad } from './arcs.ts';
 
 const bearing = (dx: number, dy: number): number => deg(Math.atan2(dx, dy));
 
@@ -40,20 +40,61 @@ export const splineEndZ = (s: EditSpline, end: 'start' | 'end'): number => (end 
 
 const EPS = 1e-9;
 
+/** skew na styku przy zmianie azymutu o Δ: tan(Δ/2) (z ograniczeniem, żeby przy zawracaniu nie rosło w nieskończoność). */
+export const jointSkew = (deltaDeg: number): number => (Math.abs(deltaDeg) < 1e-7 ? 0 : Math.tan(rad(Math.max(-175, Math.min(175, deltaDeg))) / 2));
+
 /**
- * Wyrównuje połączenie koniec A → początek B: wysokość styku, nachylenie i skew stają się średnimi z obu stron
- * (drugie końce splinów zostają na swoich wysokościach). Zwykły [spline] staje się [spline_h], gdy musi przechować wartości.
+ * Wyrównuje połączenie koniec A → początek B: wysokość styku i nachylenie stają się średnimi z obu stron (drugie końce splinów
+ * zostają na swoich wysokościach), a skew wynika z załamka azymutu na styku (A.skew końca = −tan(Δ/2), B.skew początku = +tan(Δ/2)).
+ * Zwykły [spline] staje się [spline_h], gdy musi przechować wysokość lub nachylenie.
  */
 export function alignJoin(a: EditSpline, b: EditSpline): { a: EditSpline; b: EditSpline } {
   const zJoin = (a.z + a.dz + b.z) / 2;
   const pitch = (a.pitch1 + b.pitch0) / 2;
-  const skew = (a.skew1 + b.skew0) / 2;
-  const na: EditSpline = { ...a, dz: zJoin - a.z, pitch1: pitch, skew1: skew };
+  const skew = jointSkew(angDelta(splineEndPose(a, 'end').heading, b.heading));
+  const na: EditSpline = { ...a, dz: zJoin - a.z, pitch1: pitch, skew1: -skew };
   const nb: EditSpline = { ...b, dz: b.z + b.dz - zJoin, z: zJoin, pitch0: pitch, skew0: skew };
   for (const n of [na, nb]) {
-    if (n.kind === 'spline' && (Math.abs(n.dz) > EPS || Math.abs(n.pitch0) > EPS || Math.abs(n.pitch1) > EPS || Math.abs(n.skew0) > EPS || Math.abs(n.skew1) > EPS)) n.kind = 'spline_h';
+    if (n.kind === 'spline' && (Math.abs(n.dz) > EPS || Math.abs(n.pitch0) > EPS || Math.abs(n.pitch1) > EPS)) n.kind = 'spline_h';
   }
   return { a: na, b: nb };
+}
+
+/**
+ * Po zmianie położenia lub azymutu splinów (przesunięcie, obrót) ustawia skew na ich stykach z poprzednikiem i następnikiem
+ * (obu stronom styku) według załamka azymutu; styk liczy się tylko, gdy odnośniki prev/next są wzajemne. Zwraca zmienione
+ * spliny razem z sąsiadami, którym zmieniono skew.
+ */
+export function fixJointSkews(changed: EditSpline[], neighbor: (id: string) => EditSpline | undefined): EditSpline[] {
+  const out = new Map<string, EditSpline>(changed.map((s) => [s.id, { ...s }]));
+  const touched = new Set<string>(changed.map((s) => s.id));
+  const get = (id: string): EditSpline | undefined => {
+    const hit = out.get(id);
+    if (hit) return hit;
+    const n = neighbor(id);
+    if (!n) return undefined;
+    const c = { ...n };
+    out.set(id, c);
+    return c;
+  };
+  for (const s0 of changed) {
+    const s = out.get(s0.id)!;
+    const nx = s.next !== '0' ? get(s.next) : undefined;
+    if (nx && nx.prev === s.id) {
+      const k = jointSkew(angDelta(splineEndPose(s, 'end').heading, nx.heading));
+      s.skew1 = -k;
+      nx.skew0 = k;
+      touched.add(nx.id);
+    }
+    const pv = s.prev !== '0' ? get(s.prev) : undefined;
+    if (pv && pv.next === s.id) {
+      const k = jointSkew(angDelta(splineEndPose(pv, 'end').heading, s.heading));
+      pv.skew1 = -k;
+      s.skew0 = k;
+      touched.add(pv.id);
+    }
+  }
+  return [...out.values()].filter((x) => touched.has(x.id));
 }
 
 /**

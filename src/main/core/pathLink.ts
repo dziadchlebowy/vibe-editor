@@ -24,8 +24,8 @@ export interface PlannedSpline extends PlannedArc {
 
 /**
  * Łączenie od `from` do `to` (kierunek splinów): łuki w poziomie, a wysokość zmienia się płynnie jedną krzywą Hermite’a
- * na całej długości (nachylenia na końcach = nachylenia końców, na styku łuków — ciągłe), skew rośnie liniowo od wartości
- * `from` do wartości `to`. `pathHeight` = wysokość ścieżki łączącego splinu nad jego nawierzchnią (z invis_street.sli).
+ * na całej długości (nachylenia na końcach = nachylenia końców, na styku łuków — ciągłe). Skew na stykach z przyłączanymi
+ * splinami dopasowuje się do nich (skew końca A = −skew początku B), a między łukami łączenia (styczne) wynosi 0. `pathHeight` = wysokość ścieżki łączącego splinu nad jego nawierzchnią (z invis_street.sli).
  */
 export function planConnector(from: NodePose, to: NodePose, pathHeight: number): PlannedSpline[] | string {
   const arcs = connectArcs(from, to);
@@ -41,15 +41,14 @@ export function planConnector(from: NodePose, to: NodePose, pathHeight: number):
     s = s1;
     const first = i === 0;
     const last = i === arcs.length - 1;
-    const lerp = (u: number): number => from.skew + ((to.skew - from.skew) * u) / total;
     return {
       ...a,
       z: z0 + f(s0).h,
       pitch0: first ? from.pitch : deg(Math.atan(f(s0).slope)),
       pitch1: last ? to.pitch : deg(Math.atan(f(s1).slope)),
       dz: f(s1).h - f(s0).h,
-      skew0: first ? from.skew : lerp(s0),
-      skew1: last ? to.skew : lerp(s1),
+      skew0: first ? -from.skew : 0,
+      skew1: last ? -to.skew : 0,
     };
   });
 }
@@ -157,7 +156,8 @@ export function endPose(e: LinkEnd, role: 'from' | 'to'): NodePose {
   if ('free' in e) return { x: e.x * 300, y: e.y * 300, z: e.height, pitch: e.pitch, skew: e.skew };
   const forward = role === 'from' ? e.end === 'end' : e.end === 'start';
   const sign = forward ? 1 : -1;
-  return { x: e.x * 300, y: e.y * 300, heading: e.heading + (forward ? 0 : 180), z: e.height, pitch: sign * e.pitch, skew: sign * e.skew };
+  // skew styku ma sens tylko dla końców zgodnych z kierunkiem łączenia (koniec → początek); przy odwróconych przyjmujemy 0
+  return { x: e.x * 300, y: e.y * 300, heading: e.heading + (forward ? 0 : 180), z: e.height, pitch: sign * e.pitch, skew: forward ? e.skew : 0 };
 }
 
 function resolveEnd(workDir: string, mapDir: string, ref: LinkEndRef): LinkEnd | null {
@@ -223,10 +223,10 @@ export function splineRecord(s: PlannedSpline & { id: string; prev: string; next
     fmt(s.pitch0),
     fmt(s.pitch1),
     fmt(s.dz),
+    '0',
+    '0',
     fmt(s.skew0),
     fmt(s.skew1),
-    '0',
-    '0',
     '0',
     ...(s.mirror ? ['mirror'] : []),
     '',

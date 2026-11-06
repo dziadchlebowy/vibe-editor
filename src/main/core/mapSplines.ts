@@ -35,6 +35,8 @@ export interface RawSpline {
   dz: number;
   skew0: number;
   skew1: number;
+  /** Przesunięcie tekstury wzdłuż splinu (ostatnia liczba wpisu): odległość, od której liczy się współrzędna V. */
+  texOff: number;
 }
 
 /**
@@ -44,10 +46,15 @@ export interface RawSpline {
  * dalej parametry pionowe itp.; na końcu bywa słowo „mirror” (profil odbity).
  *
  * Dla [spline_h] linijki 11–18 to: nachylenie na początku (°), nachylenie na końcu (°), różnica wysokości (m),
- * skew na początku, skew na końcu, dwa parametry profilu bocznego i przesunięcie tekstury; wysokość między końcami
- * zmienia się sześcienną krzywą Hermite’a o tych nachyleniach (ustalone z kafla mapy Warszawa 2008: nachylenia i skew
- * są ciągłe między sąsiednimi splinami, a różnica wysokości równa się różnicy wysokości początków kolejnych splinów).
- * Zwykły [spline] ma w tych polach zera i jest płaski.
+ * dwa nieustalone parametry (w próbce 0), skew na początku, skew na końcu i przesunięcie tekstury. Zwykły [spline] jest
+ * płaski i ma w liniach 11–17: cztery zera, skew początku, skew końca, przesunięcie tekstury.
+ *
+ * Wysokość między końcami zmienia się sześcienną krzywą Hermite’a o nachyleniach z pól (ustalone z kafla mapy Warszawa 2008:
+ * nachylenia są ciągłe między sąsiednimi splinami, a różnica wysokości równa się różnicy wysokości początków kolejnych splinów).
+ *
+ * Skew to tan(Δ/2), gdzie Δ to zmiana azymutu na styku sąsiednich splinów: skew końca A = −tan(Δ/2), skew początku B =
+ * +tan(Δ/2) (także dla splinów odbitych). Wyznacza ścięcie krawędzi końca (łączenie „na ukos”): punkt krawędzi leżący
+ * w bocznej odległości u od osi (w prawo +) jest przesunięty o skew·u wzdłuż osi, do przodu na obu końcach.
  */
 export function parseTileSplines(text: string): RawSpline[] {
   const out: RawSpline[] = [];
@@ -60,7 +67,8 @@ export function parseTileSplines(text: string): RawSpline[] {
     const z = Number(rec![6].replace(',', '.'));
     if (!p || ![x, y, heading, length, radius].every(Number.isFinite) || length <= 0) return;
     const tail = rec.slice(11);
-    const v = kind === 'spline_h' ? tail.map((l) => Number(l.replace(',', '.'))).map((n) => (Number.isFinite(n) ? n : 0)) : [];
+    const v = tail.filter((l) => l.toLowerCase() !== 'mirror').map((l) => Number(l.replace(',', '.'))).map((n) => (Number.isFinite(n) ? n : 0));
+    const h = kind === 'spline_h';
     out.push({
       path: p,
       id: rec![2] ?? '',
@@ -74,11 +82,13 @@ export function parseTileSplines(text: string): RawSpline[] {
       prev: rec![3] ?? '0',
       next: rec![4] ?? '0',
       kind,
-      pitch0: v[0] ?? 0,
-      pitch1: v[1] ?? 0,
-      dz: v[2] ?? 0,
-      skew0: v[3] ?? 0,
-      skew1: v[4] ?? 0,
+      pitch0: h ? (v[0] ?? 0) : 0,
+      pitch1: h ? (v[1] ?? 0) : 0,
+      dz: h ? (v[2] ?? 0) : 0,
+      // skew = tan(Δ/2) na styku z sąsiednim splinem (Δ = zmiana azymutu): [spline_h] ma go w polach 5 i 6 ogona, [spline] w 4 i 5
+      skew0: (h ? v[5] : v[4]) ?? 0,
+      skew1: (h ? v[6] : v[5]) ?? 0,
+      texOff: (h ? v[7] : v[6]) ?? 0,
     });
   };
   for (const line of splitLines(text)) {
@@ -166,7 +176,7 @@ export function buildSplinesData(
         i = roads.push({ p: sp.path, a: r3(e[0]), b: r3(e[1]), ...(t.length ? { t } : {}) }) - 1;
         idx.set(key, i);
       }
-      s.push([i, r3(sp.x), r3(sp.y), r3(sp.heading), r3(sp.length), r3(sp.radius), sp.mirror ? 1 : 0, r3(sp.z)]);
+      s.push([i, r3(sp.x), r3(sp.y), r3(sp.heading), r3(sp.length), r3(sp.radius), sp.mirror ? 1 : 0, r3(sp.z), r3(sp.skew0), r3(sp.skew1), r3(sp.texOff)]);
     }
     outTiles.push({ x: t.x, y: t.y, s });
   }

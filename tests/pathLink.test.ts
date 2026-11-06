@@ -46,7 +46,7 @@ test('hermite: wysokość i nachylenia na końcach zgodne z zadanymi', () => {
   assert.ok(Math.abs(Math.atan(f(80).slope) * (180 / Math.PI) + 0.5) < 1e-9);
 });
 
-test('planConnector: ciągła wysokość i nachylenie na styku łuków, skew liniowy', () => {
+test('planConnector: ciągła wysokość i nachylenie na styku łuków, skew dopasowany do przyłączanych splinów', () => {
   const from = { x: 0, y: 0, heading: 0, z: 10.1, pitch: 2, skew: 1 };
   const to = { x: 20, y: 60, heading: 0, z: 13.1, pitch: 0.5, skew: 3 };
   const s = planConnector(from, to, 0.1);
@@ -57,9 +57,10 @@ test('planConnector: ciągła wysokość i nachylenie na styku łuków, skew lin
   assert.ok(Math.abs(s[0].pitch1 - s[1].pitch0) < 1e-9);
   assert.ok(Math.abs(s[0].z + s[0].dz - s[1].z) < 1e-9);
   assert.ok(Math.abs(s[0].dz + s[1].dz - 3) < 1e-9);
-  assert.equal(s[0].skew0, 1);
-  assert.equal(s[1].skew1, 3);
-  assert.ok(Math.abs(s[0].skew1 - s[1].skew0) < 1e-9 && s[0].skew1 > 1 && s[0].skew1 < 3);
+  // skew na stykach z przyłączanymi splinami: skew końca A = −skew początku B; między łukami łączenia (styczne) 0
+  assert.equal(s[0].skew0, -1);
+  assert.equal(s[1].skew1, -3);
+  assert.deepEqual([s[0].skew1, s[1].skew0], [0, 0]);
 });
 
 const fields = (v: (string | number)[]): string[] => v.map(String);
@@ -82,7 +83,7 @@ test('parseTileSplines: prev/next, kind, nachylenia, dz i skew z prawdziwych wpi
 });
 
 test('kierunek ścieżki: odbity spline (mirror) odwraca kierunek ruchu, tak samo jak kierunek 1 w .sli; oba naraz się znoszą', () => {
-  const base = { prev: '0', next: '0', kind: 'spline' as const, pitch0: 0, pitch1: 0, dz: 0, skew0: 0, skew1: 0, path: 'a.sli', id: '1', x: 10, y: 20, z: 0, heading: 0, length: 50, radius: 0 };
+  const base = { prev: '0', next: '0', kind: 'spline' as const, pitch0: 0, pitch1: 0, dz: 0, skew0: 0, skew1: 0, texOff: 0, path: 'a.sli', id: '1', x: 10, y: 20, z: 0, heading: 0, length: 50, radius: 0 };
   const fwd = ['[path]', '0', '0', '0', '2.5', '0'].join(NL);
   const rev = ['[path]', '0', '0', '0', '2.5', '1'].join(NL);
   const ys = (mirror: boolean, sli: string): number[] => splinePath({ ...base, mirror }, sli, 0).pts.map((p) => p[1]);
@@ -165,7 +166,7 @@ test('endPose: łączenie wychodzi z końca splinu naprzód, a z początku „do
   const fwdEnd = endPose({ ...base, end: 'end' }, 'from');
   assert.deepEqual([fwdEnd.heading, fwdEnd.pitch, fwdEnd.skew], [30, 2, 1]);
   const backStart = endPose({ ...base, end: 'start' }, 'from');
-  assert.deepEqual([backStart.heading, backStart.pitch, backStart.skew], [210, -2, -1]);
+  assert.deepEqual([backStart.heading, backStart.pitch, backStart.skew], [210, -2, 0]); // skew styku tylko dla końców zgodnych z kierunkiem
   assert.deepEqual([endPose({ ...base, end: 'start' }, 'to').heading, endPose({ ...base, end: 'start' }, 'to').pitch], [30, 2]);
   assert.deepEqual([endPose({ ...base, end: 'end' }, 'to').heading, endPose({ ...base, end: 'end' }, 'to').pitch], [210, -2]);
   assert.equal(endPose({ free: true, x: 1, y: 2, height: 3, pitch: 0, skew: 0 }, 'to').heading, undefined);
@@ -218,6 +219,6 @@ test('łączenie z dowolnym punktem: przyłącza tylko węzeł, wysokość i nac
   assert.deepEqual([out[0].next, c.prev, c.next], ['102', '101', '0']); // przyłączony tylko do węzła
   const e = arcEnd({ x: c.x, y: c.y, heading: c.heading, length: c.length, radius: c.radius });
   assert.ok(Math.hypot(e.x - 190, e.y - 160) < 0.01);
-  assert.ok(Math.abs(c.z + c.dz - (20 - 0.1)) < 1e-4 && c.pitch1 === 1 && c.skew1 === 0.5);
+  assert.ok(Math.abs(c.z + c.dz - (20 - 0.1)) < 1e-4 && c.pitch1 === 1 && c.skew1 === -0.5); // skew końca łączenia = −skew podanego końca
   fs.rmSync(dir, { recursive: true, force: true });
 });

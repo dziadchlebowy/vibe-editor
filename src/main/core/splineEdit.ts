@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { NewSplineReq, SplineIssue, SplinePoint, SplinePointRef } from '../../shared/types.ts';
-import { alignJoin, moveSplines, newSpline, newSplineStartAt, splineEndPose, splineEndZ, type EditSpline, type PointSel } from '../../shared/splineEdit.ts';
-import { angDiff } from '../../shared/arcs.ts';
+import { alignJoin, fixJointSkews, jointSkew, moveSplines, newSpline, newSplineStartAt, splineEndPose, splineEndZ, type EditSpline, type PointSel } from '../../shared/splineEdit.ts';
+import { angDelta, angDiff } from '../../shared/arcs.ts';
 import { decodeCfg, splitLines } from './globalCfg.ts';
 import { writeTiles } from './undo.ts';
 import { assetsDir, type TileRef } from './mapIndex.ts';
@@ -83,6 +83,15 @@ export function pickSplinePoints(mapDir: string, x: number, y: number, maxDistM:
   return all.filter((p) => Math.hypot((p.x - b.x) * 300, (p.y - b.y) * 300) <= 0.3);
 }
 
+/** Spline o danym ID z dowolnego kafla mapy (pierwszy znaleziony). */
+function findSplineById(mapDir: string, tiles: TileRef[], id: string): EditSpline | undefined {
+  for (let ti = 0; ti < tiles.length; ti++) {
+    const sp = cachedTile(path.join(mapDir, tiles[ti].file))?.splines.find((s) => s.id === id);
+    if (sp) return toEditSpline(sp, tiles[ti], ti);
+  }
+  return undefined;
+}
+
 /** Spliny wskazanych końców (bez powtórzeń) w metrach świata. */
 export function loadEditSplines(mapDir: string, refs: SplinePointRef[]): EditSpline[] {
   const tiles = readTiles(mapDir);
@@ -143,11 +152,19 @@ export function rewriteSplineRecord(lines: string[], n: EditSpline, xLocal: numb
     head.forEach((v, k) => {
       if (Math.abs(Number(lines[idx[5 + k]].trim().replace(',', '.')) - Number(v)) > 1e-9) lines[idx[5 + k]] = v;
     });
-    if (wasH && idx.length > 15) {
-      // nachylenie na początku i końcu, różnica wysokości, skew na początku i końcu
-      [n.pitch0, n.pitch1, n.dz, n.skew0, n.skew1].forEach((v, k) => {
-        if (Math.abs(Number(lines[idx[11 + k]].trim().replace(',', '.')) - v) > 1e-9) lines[idx[11 + k]] = fmt(v);
-      });
+    const setField = (at: number, v: number): void => {
+      if (at < idx.length && Math.abs(Number(lines[idx[at]].trim().replace(',', '.')) - v) > 1e-9) lines[idx[at]] = fmt(v);
+    };
+    if (wasH) {
+      // nachylenie na początku i końcu, różnica wysokości; skew początku i końca w polach 5 i 6 ogona (linijki 16 i 17)
+      setField(11, n.pitch0);
+      setField(12, n.pitch1);
+      setField(13, n.dz);
+      setField(16, n.skew0);
+      setField(17, n.skew1);
+    } else {
+      setField(15, n.skew0); // zwykły [spline]: skew początku i końca w polach 4 i 5 ogona
+      setField(16, n.skew1);
     }
     return null;
   }
@@ -162,10 +179,10 @@ export function rewriteSplineRecord(lines: string[], n: EditSpline, xLocal: numb
     fmt(n.pitch0),
     fmt(n.pitch1),
     fmt(n.dz),
+    '0',
+    '0',
     fmt(n.skew0),
     fmt(n.skew1),
-    nums[4],
-    nums[5],
     nums[6],
     ...(tail.some((t) => t.toLowerCase() === 'mirror') ? ['mirror'] : []),
   ];
@@ -212,12 +229,15 @@ export function applySplineEdit(mapDir: string, refs: SplinePointRef[], dx: numb
   const res = moveSplines(loadEditSplines(mapDir, refs), sel, dx, dy, dz, arc);
   if (res.error) return { ok: false, error: res.error };
   if (res.splines.length === 0) return { ok: false, error: 'Nie znaleziono zaznaczonych splinów.' };
+  // zmiana położenia lub azymutu zmienia załamki na stykach: skew splinów i ich poprzedników/następników wynika z tych załamków
+  const moved = new Set(res.splines.map((s) => s.id));
+  const writes = Math.abs(dx) > 1e-9 || Math.abs(dy) > 1e-9 ? fixJointSkews(res.splines, (id) => findSplineById(mapDir, tiles, id)) : res.splines;
   const cache = new Map<number, TileEdit>();
-  for (const n of res.splines) {
+  for (const n of writes) {
     const [ox, oy] = origin(tiles[n.tile]);
     const [xl, yl] = [n.x - ox, n.y - oy];
     // spline jest zapisany w kaflu, w którym leży jego początek — przeniesienie do sąsiedniego kafla nie jest obsługiwane
-    if (xl < 0 || xl >= 300 || yl < 0 || yl >= 300) return { ok: false, error: `Początek splinu ${n.id} wyszedłby poza kafel, w którym jest zapisany — przesuń o mniej.` };
+    if (moved.has(n.id) && (xl < 0 || xl >= 300 || yl < 0 || yl >= 300)) return { ok: false, error: `Początek splinu ${n.id} wyszedłby poza kafel, w którym jest zapisany — przesuń o mniej.` };
     const e = openTile(mapDir, tiles, n.tile, cache);
     if (!e) return { ok: false, error: 'Nie ma pliku kafla splinu.' };
     const err = rewriteSplineRecord(e.lines, n, xl, yl);
@@ -314,6 +334,16 @@ export function deleteSplines(mapDir: string, refs: SplinePointRef[]): { ok: boo
   const targets = [...new Map(refs.map((r) => [`${r.tile}:${r.splineId}`, r])).values()];
   if (targets.length === 0) return { ok: false, error: 'Nie wskazano splinów do usunięcia.' };
   const ids = new Set(targets.map((r) => r.splineId));
+  // sąsiedzi usuwanych splinów tracą styk: ich skew po stronie usuwanego splinu wraca do 0
+  const skewFixes: { id: string; field: 'skew0' | 'skew1' }[] = [];
+  for (const r of targets) {
+    const d = tiles[r.tile] ? loadEditSplines(mapDir, [r])[0] : undefined;
+    if (!d) continue;
+    const p = d.prev !== '0' && !ids.has(d.prev) ? findSplineById(mapDir, tiles, d.prev) : undefined;
+    if (p && p.next === d.id && p.skew1 !== 0) skewFixes.push({ id: p.id, field: 'skew1' });
+    const n = d.next !== '0' && !ids.has(d.next) ? findSplineById(mapDir, tiles, d.next) : undefined;
+    if (n && n.prev === d.id && n.skew0 !== 0) skewFixes.push({ id: n.id, field: 'skew0' });
+  }
   const cache = new Map<number, TileEdit>();
   for (const r of targets) {
     if (!tiles[r.tile]) return { ok: false, error: 'Nieprawidłowy kafel splinu.' };
@@ -341,6 +371,13 @@ export function deleteSplines(mapDir: string, refs: SplinePointRef[]): { ok: boo
     });
     if (changed) cache.set(ti, edit);
   });
+  for (const f of skewFixes) {
+    const s = findSplineById(mapDir, tiles, f.id);
+    const e = s ? openTile(mapDir, tiles, s.tile, cache) : null;
+    if (!s || !e) continue;
+    const [ox, oy] = origin(tiles[s.tile]);
+    rewriteSplineRecord(e.lines, { ...s, [f.field]: 0 }, s.x - ox, s.y - oy);
+  }
   saveTiles(cache, 'Usunięcie splinów');
   return { ok: true, ids: [...ids], tiles: [...cache.keys()] };
 }
@@ -366,7 +403,7 @@ export function pickSplinePointsInBox(mapDir: string, x0: number, y0: number, x1
 }
 
 /** Progi kontroli: odchylenie ≥ próg = problem. */
-const CHECK = { gap: 0.02, heading: 0.1, height: 0.002, pitch: 0.05, skew: 0.05 };
+const CHECK = { gap: 0.02, heading: 0.1, height: 0.002, pitch: 0.05, skew: 0.02 };
 
 /**
  * Kontrola spójności splinów całej mapy: dla każdego odnośnika next porównuje koniec splinu A z początkiem B
@@ -405,12 +442,14 @@ export function checkSplines(mapDir: string): SplineIssue[] {
       const hd = angDiff(ea.heading, sb.heading);
       const dz = Math.abs(splineEndZ(a, 'end') - splineEndZ(b, 'start'));
       const dp = Math.abs(a.pitch1 - b.pitch0);
-      const dk = Math.abs(a.skew1 - b.skew0);
+      // skew styku wynika z załamka azymutu: skew końca A = −tan(Δ/2), skew początku B = +tan(Δ/2)
+      const expected = jointSkew(angDelta(ea.heading, sb.heading));
+      const dk = Math.max(Math.abs(a.skew1 + expected), Math.abs(b.skew0 - expected));
       if (gap >= CHECK.gap) push({ ...base, kind: 'gap', severity: gap / CHECK.gap, text: `Spline ${a.id} → ${b.id}: przerwa ${gap.toFixed(3)} m między końcem a początkiem.` });
       if (hd >= CHECK.heading) push({ ...base, kind: 'heading', severity: hd / CHECK.heading, text: `Spline ${a.id} → ${b.id}: załamek azymutu ${hd.toFixed(2)}°.` });
       if (dz >= CHECK.height) push({ ...base, kind: 'height', severity: dz / CHECK.height, fixable: true, text: `Spline ${a.id} → ${b.id}: skok wysokości ${dz.toFixed(3)} m.` });
       if (dp >= CHECK.pitch) push({ ...base, kind: 'pitch', severity: dp / CHECK.pitch, fixable: true, text: `Spline ${a.id} → ${b.id}: załamek nachylenia ${dp.toFixed(2)}° (${a.pitch1.toFixed(2)}° → ${b.pitch0.toFixed(2)}°).` });
-      if (dk >= CHECK.skew) push({ ...base, kind: 'skew', severity: dk / CHECK.skew, fixable: true, text: `Spline ${a.id} → ${b.id}: różnica skew ${dk.toFixed(2)}.` });
+      if (dk >= CHECK.skew) push({ ...base, kind: 'skew', severity: dk / CHECK.skew, fixable: true, text: `Spline ${a.id} → ${b.id}: skew styku (${a.skew1.toFixed(3)} / ${b.skew0.toFixed(3)}) nie zgadza się z załamkiem azymutu (powinno być ${(-expected).toFixed(3)} / ${expected.toFixed(3)}).` });
     }
     if (a.prev !== '0' && !byId.has(a.prev)) {
       const sa = splineEndPose(a, 'start');

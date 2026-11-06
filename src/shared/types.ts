@@ -384,6 +384,14 @@ export interface SplinePoint extends SplinePointRef {
   path: string;
 }
 
+/** Tekstura w RGBA (wiersze od góry, największy wymiar ≤ 256) wraz ze średnim kolorem. */
+export interface TextureImage {
+  w: number;
+  h: number;
+  data: Uint8Array;
+  avg: [number, number, number];
+}
+
 /** Problem znaleziony przez kontrolę spójności splinów (połączenie koniec → początek). */
 export interface SplineIssue {
   kind: 'gap' | 'heading' | 'height' | 'pitch' | 'skew' | 'link' | 'missing';

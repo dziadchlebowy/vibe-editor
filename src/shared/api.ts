@@ -1,3 +1,4 @@
+import type { SliProfile } from './sli.ts';
 import type { EditSpline } from './splineEdit.ts';
 import type {
   ConsoleLine,
@@ -23,6 +24,7 @@ import type {
   RouteSegment,
   SplineIssue,
   SplinePoint,
+  TextureImage,
   SplinePointRef,
   StationEdits,
   TripRoute,
@@ -80,6 +82,10 @@ export interface VeApi {
   planLink(a: LinkEndRef, b: LinkEndRef): Promise<LinkPlan>;
   /** Tworzy łączenie: dopisuje spliny z invis_street.sli do kafla i przyłącza je do wolnych końców (kopie .map.bak). */
   createLink(a: LinkEndRef, b: LinkEndRef, reverse: boolean): Promise<OkResult & { ids?: string[] }>;
+  /** Profil .sli (tekstury i pasy przekroju) pliku z kopii zasobów mapy; null, gdy nie ma pliku. */
+  getSliProfile(sli: string): Promise<SliProfile | null>;
+  /** Tekstura z folderu OMSI wskazana w .sli (BMP, TGA, DDS, PNG, JPG), zmniejszona do ≤ 256 px; null, gdy nie znaleziono lub nie da się odczytać. */
+  getSliTexture(sli: string, name: string): Promise<TextureImage | null>;
   /** Końce splinów (wraz z pokrywającymi się końcami innych splinów) najbliższe punktowi (jednostki kafli), maks. maxDistM metrów. */
   pickSplinePoints(x: number, y: number, maxDistM: number): Promise<SplinePoint[]>;
   /** Końce splinów w prostokącie (jednostki kafli) — zaznaczanie prostokątem. */

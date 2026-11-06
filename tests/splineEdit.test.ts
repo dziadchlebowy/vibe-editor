@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { arcEnd } from '../src/shared/arcs.ts';
-import { moveSplines, newSpline, newSplineStartAt, splineEndPose, splineEndZ, type EditSpline } from '../src/shared/splineEdit.ts';
+import { arcEnd, arcPoints } from '../src/shared/arcs.ts';
+import { fixJointSkews, jointSkew, moveSplines, newSpline, newSplineStartAt, splineEndPose, splineEndZ, type EditSpline } from '../src/shared/splineEdit.ts';
 import { parseTileSplines, buildSplinesData, loadMapSplines, splinesPath } from '../src/main/core/mapSplines.ts';
 import { applySplineEdit, createSpline, deleteSplines, loadEditSplines, pickSplinePoints, refreshSplinesIndex, rewriteSplineRecord } from '../src/main/core/splineEdit.ts';
 
@@ -67,11 +67,12 @@ test('rewriteSplineRecord: zmienia tylko różniące się pola, a [spline] z dz 
   const [a] = parseTileSplines(lines.join(NL));
   assert.deepEqual([a.x, a.z, a.dz], [101.5, 12, 1]);
   const plain: EditSpline = { ...base, id: '8', kind: 'spline_h', x: 5, y: 6, z: 1, dz: 2, heading: 90, length: 20 };
-  assert.equal(rewriteSplineRecord(lines, plain, 5, 6), null);
+  assert.equal(rewriteSplineRecord(lines, { ...plain, skew0: 0.1495907, skew1: -0.0963 }, 5, 6), null);
   const sp = parseTileSplines(lines.join(NL));
   assert.deepEqual([sp[1].kind, sp[1].dz, sp[1].z, sp[1].mirror], ['spline_h', 2, 1, true]);
   const raw = lines.join(NL);
-  assert.ok(raw.includes('0.1495907') && raw.includes('-0.0963') && raw.includes('25')); // parametry profilu i przesunięcie tekstury zachowane
+  assert.ok(raw.includes('0.1495907') && raw.includes('-0.0963') && raw.includes('25')); // skew i przesunięcie tekstury zachowane po zamianie na [spline_h]
+  assert.deepEqual([sp[1].skew0, sp[1].skew1, sp[1].texOff], [0.1495907, -0.0963, 25]);
   assert.equal(typeof rewriteSplineRecord(lines, { ...base, id: '999' }, 0, 0), 'string');
 });
 
@@ -313,6 +314,99 @@ test('indeks splinów po usunięciu wszystkich splinów kafla nie zostaje nieakt
   assert.equal(u.ok, true);
   refreshSplinesIndex(dir, map, u.tiles ?? []);
   assert.equal(loadMapSplines(dir)!.tiles[0].s.length, 3);
+  clearUndo();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('skew z prawdziwych danych: A.skew końca = −tan(Δ/2), B.skew początku = +tan(Δ/2) (róg chodnika o ok. 95,5°)', () => {
+  const text = [
+    rec('[spline]', 1, 0, 2, 0, 0, 0, 0, 10, 0, [0, 0, 0, 0, 0.4420748, -1.100772, 25]),
+    rec('[spline]', 2, 1, 0, 0, 0, 10, 95.4908, 10, 0, [0, 0, 0, 0, 1.100772, 0, 35]),
+  ].join(NL);
+  const [a, b] = parseTileSplines(text);
+  assert.deepEqual([a.skew0, a.skew1, a.texOff, b.skew0, b.skew1, b.texOff], [0.4420748, -1.100772, 25, 1.100772, 0, 35]);
+  assert.ok(Math.abs(jointSkew(95.4908) - 1.100772) < 2e-4);
+  // spline_h: skew w polach 5 i 6 ogona, przesunięcie tekstury w 7
+  const h = parseTileSplines(rec('[spline_h]', 3, 0, 0, 0, 0, 0, 0, 10, 0, [1, 2, 3, 0, 0, 0.5, -0.5, 7]))[0];
+  assert.deepEqual([h.pitch0, h.pitch1, h.dz, h.skew0, h.skew1, h.texOff], [1, 2, 3, 0.5, -0.5, 7]);
+  // fixJointSkews odtwarza te wartości z geometrii (wzajemne odnośniki prev/next)
+  const mk = (id: string, prev: string, next: string, y: number, hd: number): EditSpline => ({ ...base, id, prev, next, x: 0, y, heading: hd, length: 10, radius: 0, kind: 'spline', dz: 0, pitch0: 0, pitch1: 0 });
+  const A = mk('1', '0', '2', 0, 0);
+  const B = mk('2', '1', '0', 10, 95.4908);
+  const r = fixJointSkews([A], (id) => (id === '2' ? B : undefined));
+  const [ra, rb] = [r.find((s) => s.id === '1')!, r.find((s) => s.id === '2')!];
+  assert.ok(Math.abs(ra.skew1 + 1.100772) < 2e-4 && Math.abs(rb.skew0 - 1.100772) < 2e-4);
+  // brak wzajemności odnośników = brak styku do dopasowania
+  assert.deepEqual(fixJointSkews([A], () => ({ ...B, prev: '0' })).map((s) => s.id), ['1']);
+  assert.equal(jointSkew(0), 0);
+});
+
+test('G zmienia azymut końca: skew splinu i jego następnika/poprzednika ustawia się z załamka; usunięcie następnika zeruje skew sąsiada', () => {
+  clearUndo();
+  const { dir, map } = setup();
+  const file = path.join(map, 'a.map');
+  // 101 → 102 (wzajemne odnośniki); przesuń koniec 101 o (12, 0): azymut końca 101 się zmienia, 102 ma azymut 0 → załamek
+  assert.equal(applySplineEdit(map, [{ splineId: '101', end: 'end', tile: 0 }], 12, 0, 0).ok, true);
+  let [a, b] = parseTileSplines(fs.readFileSync(file, 'utf8'));
+  const endHeading = arcEnd({ x: a.x, y: a.y, heading: a.heading, length: a.length, radius: a.radius }).heading;
+  const d = ((b.heading - endHeading + 540) % 360) - 180;
+  assert.ok(Math.abs(d) > 1);
+  assert.ok(Math.abs(a.skew1 + Math.tan((d * Math.PI) / 360)) < 1e-5, `a.skew1=${a.skew1} d=${d}`);
+  assert.ok(Math.abs(b.skew0 - Math.tan((d * Math.PI) / 360)) < 1e-5);
+  // obrót prostą (Alt): też aktualizuje skew po obu stronach
+  clearUndo();
+  assert.equal(applySplineEdit(map, [{ splineId: '102', end: 'end', tile: 0 }], 15, 0, 0, false).ok, true);
+  [a, b] = parseTileSplines(fs.readFileSync(file, 'utf8'));
+  const e2 = arcEnd({ x: a.x, y: a.y, heading: a.heading, length: a.length, radius: a.radius }).heading;
+  const d2 = ((b.heading - e2 + 540) % 360) - 180;
+  assert.ok(Math.abs(a.skew1 + Math.tan((d2 * Math.PI) / 360)) < 1e-5 && Math.abs(b.skew0 - Math.tan((d2 * Math.PI) / 360)) < 1e-5);
+  // usunięcie splinu 102: skew końca 101 wraca do 0 (koniec już nie ma sąsiada)
+  assert.equal(deleteSplines(map, [{ splineId: '102', end: 'start', tile: 0 }]).ok, true);
+  a = parseTileSplines(fs.readFileSync(file, 'utf8'))[0];
+  assert.equal(a.next, '0');
+  assert.equal(a.skew1, 0);
+  clearUndo();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('ścięcie końców wg skew: krawędzie sąsiednich splinów schodzą się w tych samych punktach (miter), po stronie wewnętrznej krótsze', () => {
+  // A: na północ 10 m od (0,0); B: od (0,10) skręt o Δ w prawo (azymut Δ), prosta 10 m; szerokość pasa u ∈ [−1, 1] (w prawo +)
+  for (const delta of [30, 95.4908, -60, 150]) {
+    const A = { x: 0, y: 0, heading: 0, radius: 0, length: 10 };
+    const B = { x: 0, y: 10, heading: delta, radius: 0, length: 10 };
+    const k = jointSkew(delta);
+    const sk1 = -k; // skew końca A
+    const sk0 = k; // skew początku B
+    for (const u of [-1, 1, 0.4]) {
+      // koniec krawędzi A: oś przesunięta o skew·u do przodu; początek krawędzi B: też o skew·u do przodu
+      const ea = arcPoints(A.x, A.y, A.heading, A.radius, A.length + sk1 * u, u).pop()!;
+      const sb = arcPoints(B.x, B.y, B.heading, B.radius, sk0 * u, u).pop() ?? [B.x, B.y];
+      const sbPoint = sk0 * u === 0 ? [B.x + Math.cos((B.heading * Math.PI) / 180) * u, B.y - Math.sin((B.heading * Math.PI) / 180) * u] : sb;
+      assert.ok(Math.hypot(ea[0] - sbPoint[0], ea[1] - sbPoint[1]) < 1e-9, `Δ=${delta}, u=${u}`);
+    }
+    // przy skręcie w prawo (Δ > 0) prawa krawędź A (u = 1) kończy się wcześniej niż lewa (u = −1)
+    const right = A.length + sk1 * 1;
+    const left = A.length + sk1 * -1;
+    assert.equal(delta > 0 ? right < left : right > left, true);
+  }
+});
+
+test('kontrola spójności: skew niezgodny z załamkiem azymutu jest zgłaszany jako naprawialny, a wyrównanie ustawia go z geometrii', () => {
+  clearUndo();
+  const { dir, map } = setup();
+  const file = path.join(map, 'a.map');
+  // 103 → nowy spline 104 pod kątem ~90° z wzajemnymi odnośnikami, ale ze skew 0 (tak, jakby ktoś ustawił je ręcznie)
+  const text = fs.readFileSync(file, 'utf8').replace(rec('[spline]', 103, 0, 0, 220, 4, 20, 90, 30, 0, [0, 0, 0, 0, 0, 0, 0]), rec('[spline]', 103, 0, 104, 220, 4, 20, 90, 30, 0, [0, 0, 0, 0, 0, 0, 0]) + NL + rec('[spline]', 104, 103, 0, 250, 4, 20, 180, 20, 0, [0, 0, 0, 0, 0, 0, 0]));
+  fs.writeFileSync(file, text);
+  let issues = checkSplines(map).filter((i) => i.a.splineId === '103');
+  assert.deepEqual(issues.map((i) => i.kind), ['heading', 'skew']);
+  assert.ok(issues.find((i) => i.kind === 'skew')!.fixable);
+  assert.equal(alignSplines(map, { splineId: '103', end: 'end', tile: 0 }, { splineId: '104', end: 'start', tile: 0 }).ok, true);
+  const all = parseTileSplines(fs.readFileSync(file, 'utf8'));
+  const [s103, s104] = [all.find((s) => s.id === '103')!, all.find((s) => s.id === '104')!];
+  assert.ok(Math.abs(s103.skew1 + 1) < 1e-6 && Math.abs(s104.skew0 - 1) < 1e-6); // zakręt o 90° → tan(45°) = 1
+  issues = checkSplines(map).filter((i) => i.a.splineId === '103');
+  assert.deepEqual(issues.map((i) => i.kind), ['heading']); // załamek azymutu zostaje (to geometria), skew jest już zgodny
   clearUndo();
   fs.rmSync(dir, { recursive: true, force: true });
 });

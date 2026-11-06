@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, shell } from 'electron';
 import { exec, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,6 +10,7 @@ import type {
   LinkEndRef,
   NewSplineReq,
   SplinePointRef,
+  TextureImage,
   RouteSegment,
   StationEdits,
   RunState,
@@ -24,7 +25,10 @@ import type { Emit } from './core/emit.ts';
 import { findMapFolders, writeMapInfo } from './core/globalCfg.ts';
 import { applyFailed, clearFailed, writeLastRun } from './core/failed.ts';
 import { GitRunner, setupRepo, syncToRemote } from './core/git.ts';
-import { assetsDir, buildMapIndex, loadMapIndex, toCatalog, toOverview } from './core/mapIndex.ts';
+import { assetsDir, buildMapIndex, loadMapIndex, safeJoin, toCatalog, toOverview } from './core/mapIndex.ts';
+import { parseSliProfile } from '../shared/sli.ts';
+import { decodeCfg } from './core/globalCfg.ts';
+import { averageColor, decodeImage, downscale, resolveTexture, type RgbaImage } from './core/texture.ts';
 import { loadTimetable, saveLine, saveTrip } from './core/timetable.ts';
 import { createLink, pickLinkNode, planLink } from './core/pathLink.ts';
 import { redoLast, undoLast, undoState } from './core/undo.ts';
@@ -452,6 +456,53 @@ function registerIpc(): void {
     const r = applySplineEdit(d, refs, dx, dy, dz, arc !== false);
     if (r.ok && r.tiles) afterSplineWrite(d, r.tiles);
     return r;
+  });
+  // tekstury splinów: profil .sli z kopii zasobów mapy, obrazy z folderu OMSI (dekodowane raz i zapamiętane)
+  const profileCache = new Map<string, ReturnType<typeof parseSliProfile> | null>();
+  const textureCache = new Map<string, TextureImage | null>();
+  ipcMain.handle('tex:profile', (_e, sli: string) => {
+    if (!settings.workDir || typeof sli !== 'string') return null;
+    const key = `${settings.workDir}|${sli.toLowerCase()}`;
+    if (profileCache.has(key)) return profileCache.get(key) ?? null;
+    let out: ReturnType<typeof parseSliProfile> | null = null;
+    try {
+      const full = safeJoin(assetsDir(settings.workDir), sli);
+      if (full && fs.existsSync(full)) out = parseSliProfile(decodeCfg(fs.readFileSync(full)).text);
+    } catch {
+      out = null;
+    }
+    profileCache.set(key, out);
+    return out;
+  });
+  ipcMain.handle('tex:image', (_e, sli: string, name: string): TextureImage | null => {
+    if (!settings.omsiDir || typeof sli !== 'string' || typeof name !== 'string') return null;
+    const file = resolveTexture(settings.omsiDir, sli, name, settings.mapFolder || undefined);
+    if (!file) return null;
+    if (textureCache.has(file)) return textureCache.get(file) ?? null;
+    let out: TextureImage | null = null;
+    try {
+      const buf = fs.readFileSync(file);
+      let img: RgbaImage | null = decodeImage(buf, file);
+      if (!img) {
+        // PNG i JPG dekoduje Electron; toBitmap() zwraca BGRA
+        const ni = nativeImage.createFromPath(file);
+        if (!ni.isEmpty()) {
+          const { width, height } = ni.getSize();
+          const bgra = ni.toBitmap();
+          const rgba = new Uint8Array(bgra.length);
+          for (let i = 0; i < bgra.length; i += 4) rgba.set([bgra[i + 2], bgra[i + 1], bgra[i], bgra[i + 3]], i);
+          img = { w: width, h: height, data: rgba };
+        }
+      }
+      if (img) {
+        const small = downscale(img, 256);
+        out = { w: small.w, h: small.h, data: small.data, avg: averageColor(small) };
+      }
+    } catch {
+      out = null;
+    }
+    textureCache.set(file, out);
+    return out;
   });
   ipcMain.handle('spl:box', (_e, x0: number, y0: number, x1: number, y1: number) => {
     const d = mapDir();

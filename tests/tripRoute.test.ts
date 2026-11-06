@@ -8,7 +8,7 @@ import { arcPoints, buildTripRoute, loadTripRoute, objectPathPoints, parseTtr, p
 import { loadTimetable, parseTrip } from '../src/main/core/timetable.ts';
 
 const NL = '\r\n';
-const FLAT = { prev: '0', next: '0', kind: 'spline' as const, pitch0: 0, pitch1: 0, dz: 0, skew0: 0, skew1: 0 };
+const FLAT = { prev: '0', next: '0', kind: 'spline' as const, pitch0: 0, pitch1: 0, dz: 0, skew0: 0, skew1: 0, texOff: 0 };
 const entry = (i: number, v: (string | number)[]): string => [`   ${i}:`, '[track_entry]', ...v, ''].join(NL);
 const TTR = [
   '-----------------------', 'Time Table Track File', '-----------------------', '', 'Created with Omsi Version 2.3.004', 'Date: 01.08.2026', '',

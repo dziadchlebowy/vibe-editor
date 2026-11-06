@@ -12,6 +12,8 @@ const unit = (h: number): V => [Math.sin(rad(h)), Math.cos(rad(h))];
 const dot = (a: V, b: V): number => a[0] * b[0] + a[1] * b[1];
 const cross = (a: V, b: V): number => a[0] * b[1] - a[1] * b[0];
 const hdgOf = (v: V): number => deg(Math.atan2(v[0], v[1]));
+/** Różnica azymutów `to − from` w (−180°, 180°]. */
+export const angDelta = (from: number, to: number): number => ((((to - from) % 360) + 540) % 360) - 180;
 export const angDiff = (a: number, b: number): number => Math.abs(((((a - b) % 360) + 540) % 360) - 180);
 
 export interface Pose {

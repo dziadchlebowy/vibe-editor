@@ -687,7 +687,7 @@ function setPinMode(on: boolean): void {
   updateMapToolbar();
 }
 
-const mapLayers = { paths: false, stops: false, splines: true };
+const mapLayers = { paths: false, stops: false, splines: true, textures: true };
 const layerCbs: Partial<Record<keyof typeof mapLayers, HTMLInputElement>> = {};
 
 async function applyMapSettings(): Promise<void> {
@@ -2033,7 +2033,7 @@ function renderSplPanel(state: EditSpline[], error: string | undefined, planned:
           'div',
           { class: 'lk-issue' },
           h('span', { class: 'lk-meta' }, it.text),
-          h('span', { class: 'rt-buttons' }, routeButton('Idź', 'Przejdź do miejsca połączenia i zaznacz węzeł', () => void splGoto(it)), it.fixable ? routeButton('Wyrównaj', 'Ustaw wysokość, nachylenie i skew styku jako średnie z obu stron', () => void splAlign(it)) : h('span')),
+          h('span', { class: 'rt-buttons' }, routeButton('Idź', 'Przejdź do miejsca połączenia i zaznacz węzeł', () => void splGoto(it)), it.fixable ? routeButton('Wyrównaj', 'Ustaw wysokość i nachylenie styku jako średnie z obu stron, a skew według załamka azymutu', () => void splAlign(it)) : h('span')),
         ),
       );
     }
@@ -2065,6 +2065,8 @@ function mountMapTab(): void {
   clear(root);
   mapGrid = new MapGrid({
     mode: 'info',
+    loadSliProfile: (sli) => ve.getSliProfile(sli),
+    loadTexture: (sli, name) => ve.getSliTexture(sli, name),
     onStopClick: (s) => {
       if (mapMode === 'view') openStopDialog(s);
     },
@@ -2163,6 +2165,7 @@ function mountMapTab(): void {
       h('button', { class: 'btn', onClick: () => mapGrid.fit() }, 'Wycentruj'),
       rescanBtn,
       layerBox('Spliny', 'Rysuj spliny (jezdnie)', 'splines'),
+      layerBox('Tekstury', 'Kolor i tekstury splinów z plików .sli (z folderu OMSI): kolor średni od ok. 1,5 px na metr, wzór od ok. 3 px na metr', 'textures'),
       layerBox('Ścieżki', 'Ścieżki ruchu ze splinów (po przeskanowaniu mapy)', 'paths'),
       layerBox('Przystanki', 'Przystanki (obiekty z [busstop]); najedź, by zobaczyć nazwę, kliknij, by edytować', 'stops'),
       h('div', { class: 'spacer' }),
