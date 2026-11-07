@@ -410,3 +410,13 @@ test('kontrola spójności: skew niezgodny z załamkiem azymutu jest zgłaszany 
   clearUndo();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('indeks splinów zawiera różnicę wysokości (do kolejności warstw) i skew, przesunięcie tekstury', () => {
+  const { dir } = setup();
+  const s = loadMapSplines(dir)!.tiles[0].s;
+  // [droga, x, y, azymut, długość, promień, odbicie, z, skew początku, skew końca, przesunięcie tekstury, dz]
+  assert.equal(s[0].length, 12);
+  assert.deepEqual([s[0][7], s[0][11]], [10, 3]);
+  assert.deepEqual([s[1][7], s[1][11]], [13, 0]); // zwykły [spline] jest płaski
+  fs.rmSync(dir, { recursive: true, force: true });
+});

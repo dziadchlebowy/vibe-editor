@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { parseSliProfile, texturePatternMatrix } from '../src/shared/sli.ts';
+import { bandZ, parseSliProfile, texturePatternMatrix } from '../src/shared/sli.ts';
 import { averageColor, decodeBmp, decodeDds, decodeImage, decodeTga, downscale, resolveTexture } from '../src/main/core/texture.ts';
 
 const px = (img: { w: number; data: Uint8Array }, x: number, y: number): number[] => [...img.data.subarray((y * img.w + x) * 4, (y * img.w + x) * 4 + 4)];
@@ -149,7 +149,8 @@ test('profil .sli: tekstury, profile z indeksem tekstury, pasy między punktami,
   const invis = ['Invisible', '', '[texture]', 'helper_path_cars_1.bmp', '', '[profile]', '0', '[profilepnt]', '-1.5', '0.1', '0', '-0.1', '[profilepnt]', '1.5', '0.1', '1', '', '[path]', '0', '0', '0.1', '3', '0'].join('\r\n');
   const p = parseSliProfile(invis);
   assert.deepEqual(p.textures, ['helper_path_cars_1.bmp']);
-  assert.deepEqual(p.bands, [{ x0: -1.5, x1: 1.5, u0: 0, u1: 1, tex: 0, vs: -0.1 }]);
+  assert.deepEqual(p.bands, [{ x0: -1.5, x1: 1.5, y0: 0.1, y1: 0.1, u0: 0, u1: 1, tex: 0, vs: -0.1 }]);
+  assert.equal(p.onlyEditor, false);
   const two = [
     '[texture]', 'a.bmp', '[texture]', 'b.dds',
     '[profile]', '1', '[profilepnt]', '-4', '0', '0', '0.167', '[profilepnt]', '0', '0.1', '1', '0.167', '[profilepnt]', '4', '0', '0', '0.167',
@@ -182,4 +183,22 @@ test('macierz wzoru tekstury: U biegnie w poprzek pasa, V wzdłuż splinu (z prz
   assert.ok(Math.abs(north.e + north.c * (o.H * o.vs * (o.texOff + o.sMid)) - (o.px - 3 * o.mPx)) < 1e-6);
   // powtórzenie co 1/vs metrów: przesunięcie o H pikseli w dół tekstury to 10 m wzdłuż splinu (V rośnie o 1)
   assert.ok(Math.abs(Math.hypot(north.c * o.H, north.d * o.H) - 10 * o.mPx) < 1e-6);
+});
+
+test('profil .sli: wysokości krawędzi pasów, znacznik [onlyeditor], kolejność warstw wg wysokości', () => {
+  const sli = [
+    'Ulica z krawężnikiem', '[onlyeditor]', '[texture]', 'a.bmp', '[texture]', 'b.bmp',
+    '[profile]', '0', '[profilepnt]', '-5', '0', '0', '0.1', '[profilepnt]', '-4', '0', '1', '[profilepnt]', '4', '0', '0', '[profilepnt]', '5', '0.15', '1',
+    '[profile]', '1', '[profilepnt]', '-6', '0.15', '0', '[profilepnt]', '-5', '0.15', '1',
+  ].join('\n');
+  const p = parseSliProfile(sli);
+  assert.equal(p.onlyEditor, true);
+  assert.deepEqual(p.bands.map((b) => [b.x0, b.x1, b.y0, b.y1, b.tex]), [[-5, -4, 0, 0, 0], [-4, 4, 0, 0, 0], [4, 5, 0, 0.15, 0], [-6, -5, 0.15, 0.15, 1]]);
+  assert.equal(parseSliProfile('[ONLYEDITOR]\n').onlyEditor, true); // wielkość liter bez znaczenia
+  // wyższy pas leży na wierzchu: krawężnik (0,15 m) nad jezdnią (0 m); spline wyżej (z = 4 m) nad niższym nawet przy niższym pasie
+  const road = bandZ(0, 0, p.bands[1]);
+  const curb = bandZ(0, 0, p.bands[3]);
+  assert.ok(curb > road);
+  assert.ok(bandZ(4, 0, p.bands[1]) > bandZ(0, 0, p.bands[3])); // estakada nad ulicą
+  assert.equal(bandZ(1, 2, { y0: 0.1, y1: 0.3 }), 2.2); // oś w połowie rampy (1 + 2/2) + średnia wysokość krawędzi (0,2)
 });

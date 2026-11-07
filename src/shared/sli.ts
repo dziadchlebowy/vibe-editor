@@ -6,6 +6,9 @@ export interface SliBand {
   /** Współrzędne tekstury (U) na krawędziach pasa. */
   u0: number;
   u1: number;
+  /** Wysokość krawędzi pasa nad osią splinu (m) — druga liczba punktu profilu; wyższe pasy są rysowane na wierzchu. */
+  y0: number;
+  y1: number;
   /** Indeks tekstury na liście `textures`. */
   tex: number;
   /** Współrzędna V tekstury na metr długości splinu (znak = kierunek); odwrotność długości powtórzenia tekstury. */
@@ -15,7 +18,12 @@ export interface SliBand {
 export interface SliProfile {
   textures: string[];
   bands: SliBand[];
+  /** Plik zawiera znacznik [onlyeditor]: spline jest pomocniczy, widoczny tylko w edytorze. */
+  onlyEditor: boolean;
 }
+
+/** Wysokość pasa nad ziemią do kolejności rysowania: średnia wysokość osi splinu (początek + dz/2) plus średnia wysokość krawędzi pasa. */
+export const bandZ = (splineZ: number, splineDz: number, band: Pick<SliBand, 'y0' | 'y1'>): number => splineZ + splineDz / 2 + (band.y0 + band.y1) / 2;
 
 /** Domyślne powtórzenie tekstury, gdy .sli nie podaje skali V: co 10 m. */
 export const DEFAULT_VS = 0.1;
@@ -28,13 +36,16 @@ export const DEFAULT_VS = 0.1;
 export function parseSliProfile(text: string): SliProfile {
   const lines = text.split(/\r?\n/).map((l) => l.trim());
   const textures: string[] = [];
-  const profiles: { tex: number; pts: { x: number; u: number; v: number | null }[] }[] = [];
+  const profiles: { tex: number; pts: { x: number; y: number; u: number; v: number | null }[] }[] = [];
+  let onlyEditor = false;
   let cur: (typeof profiles)[number] | null = null;
   const num = (s: string): number => Number(s.replace(',', '.'));
   for (let i = 0; i < lines.length; i++) {
     const m = lines[i].toLowerCase();
     if (!m.startsWith('[')) continue;
-    if (m === '[texture]') {
+    if (m === '[onlyeditor]') {
+      onlyEditor = true;
+    } else if (m === '[texture]') {
       let j = i + 1;
       while (j < lines.length && lines[j] === '') j++;
       if (j < lines.length && !lines[j].startsWith('[')) textures.push(lines[j]);
@@ -51,7 +62,7 @@ export function parseSliProfile(text: string): SliProfile {
         if (lines[j].startsWith('[')) break;
         if (lines[j] !== '') v.push(num(lines[j]));
       }
-      if (cur && v.length >= 3 && v.slice(0, 3).every(Number.isFinite)) cur.pts.push({ x: v[0], u: v[2], v: v.length > 3 && Number.isFinite(v[3]) ? v[3] : null });
+      if (cur && v.length >= 3 && v.slice(0, 3).every(Number.isFinite)) cur.pts.push({ x: v[0], y: v[1], u: v[2], v: v.length > 3 && Number.isFinite(v[3]) ? v[3] : null });
     } else if (m === '[path]') {
       cur = null;
     }
@@ -62,10 +73,10 @@ export function parseSliProfile(text: string): SliProfile {
     for (let i = 0; i + 1 < p.pts.length; i++) {
       const [a, b] = [p.pts[i], p.pts[i + 1]];
       if (Math.abs(b.x - a.x) < 1e-6 || p.tex < 0 || p.tex >= textures.length) continue;
-      bands.push({ x0: a.x, x1: b.x, u0: a.u, u1: b.u, tex: p.tex, vs: Math.abs(vs) < 1e-9 ? DEFAULT_VS : vs });
+      bands.push({ x0: a.x, x1: b.x, y0: a.y, y1: b.y, u0: a.u, u1: b.u, tex: p.tex, vs: Math.abs(vs) < 1e-9 ? DEFAULT_VS : vs });
     }
   }
-  return { textures, bands };
+  return { textures, bands, onlyEditor };
 }
 
 /**

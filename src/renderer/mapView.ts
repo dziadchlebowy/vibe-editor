@@ -1,5 +1,5 @@
 import { toParams } from '../shared/busStop.ts';
-import { texturePatternMatrix, type SliProfile } from '../shared/sli.ts';
+import { bandZ, texturePatternMatrix, type SliBand, type SliProfile } from '../shared/sli.ts';
 import type { MapObjPaths, MapOverview, MapSplines, MapStops, MapTileView, RouteSegment, TaskPin, TextureImage, TileCoord, TripRoute } from '../shared/types.ts';
 import { clear, h } from './dom.ts';
 
@@ -20,7 +20,9 @@ interface TexEntry {
 /** Tekstury ładujemy od tego zbliżenia (px na kafel, ok. 1,5 px/m); wzór rysujemy od drugiego progu (ok. 3 px/m). */
 const TEX_LOAD_SCALE = 450;
 const TEX_DRAW_SCALE = 900;
-const TEX_BUDGET = 4000; // maks. liczba kawałków pasów teksturowanych w jednej klatce
+const TEX_BUDGET = 4000;
+/** Pasy profili .sli rysujemy od tego zbliżenia (px na kafel, ok. 0,4 px/m); wcześniej spline to jeden pas. */
+const PROFILE_SCALE = 120; // maks. liczba kawałków pasów teksturowanych w jednej klatce
 
 const MIN_SCALE = 3;
 const MAX_SCALE = 48000; // px na kafel (300 m): 48000 → 160 px na metr
@@ -119,7 +121,8 @@ export class MapGrid {
   private pins: GridPin[] = [];
   private splines: MapSplines | null = null;
   private roadColors: string[] = [];
-  private layers = { paths: false, stops: false, splines: true, textures: true };
+  private layers = { paths: false, stops: false, splines: true, textures: true, onlyEditor: true };
+  private roadHsl: [number, number, number][] = [];
   private profiles = new Map<string, SliProfile | null | 'loading'>();
   private texImgs = new Map<string, TexEntry | null | 'loading'>();
   private redrawPending = false;
@@ -207,19 +210,61 @@ export class MapGrid {
     });
   }
 
+  private profileLoad(sli: string): Promise<void> {
+    this.profiles.set(sli, 'loading');
+    return (this.opts.loadSliProfile?.(sli) ?? Promise.resolve(null))
+      .then((p) => void this.profiles.set(sli, p))
+      .catch(() => void this.profiles.set(sli, null))
+      .finally(() => this.scheduleDraw());
+  }
+
   /** Profil .sli drogi; pierwsze wywołanie zleca wczytanie (do tego czasu null) i po nim przerysowuje mapę. */
   private profileFor(sli: string): SliProfile | null {
     const hit = this.profiles.get(sli);
     if (hit === 'loading') return null;
     if (hit !== undefined) return hit;
     if (!this.opts.loadSliProfile) return null;
-    this.profiles.set(sli, 'loading');
-    this.opts
-      .loadSliProfile(sli)
-      .then((p) => this.profiles.set(sli, p))
-      .catch(() => this.profiles.set(sli, null))
-      .finally(() => this.scheduleDraw());
+    void this.profileLoad(sli);
     return null;
+  }
+
+  /** Wczytuje w tle profile wszystkich dróg z indeksu (po kilka naraz), żeby pasy i znacznik [onlyeditor] były znane od razu. */
+  private preloadProfiles(): void {
+    const roads = this.splines?.roads;
+    if (!roads || !this.opts.loadSliProfile) return;
+    const queue = [...new Set(roads.map((r) => r.p))].filter((p) => !this.profiles.has(p));
+    let active = 0;
+    const pump = (): void => {
+      while (active < 4 && queue.length > 0) {
+        const p = queue.shift()!;
+        if (this.profiles.has(p)) continue;
+        active++;
+        void this.profileLoad(p).finally(() => {
+          active--;
+          pump();
+        });
+      }
+    };
+    pump();
+  }
+
+  /** Spline jest ukryty, gdy jego .sli ma [onlyeditor], a „Tylko edytor” jest wyłączone (nieznany profil = widoczny). */
+  private hiddenEditorOnly(sli: string | undefined): boolean {
+    if (this.layers.onlyEditor || !sli) return false;
+    const p = this.profiles.get(sli);
+    return !!p && p !== 'loading' && p.onlyEditor;
+  }
+
+  /** Kolor pasa: średni kolor jego tekstury (gdy znany), inaczej kolor drogi rozjaśniony wraz z wysokością pasa nad osią. */
+  private bandColor(roadIdx: number, sli: string, band: SliBand, texturesOn: boolean): string {
+    if (texturesOn) {
+      const prof = this.profiles.get(sli);
+      const e = prof && prof !== 'loading' ? this.textureFor(sli, prof.textures[band.tex]) : null;
+      if (e) return `rgb(${e.avg[0]} ${e.avg[1]} ${e.avg[2]})`;
+    }
+    const [hue, sat, light] = this.roadHsl[roadIdx] ?? [215, 30, 30];
+    const y = (band.y0 + band.y1) / 2;
+    return `hsl(${hue} ${sat}% ${Math.max(10, Math.min(70, light + Math.max(-8, Math.min(16, y * 60))))}%)`;
   }
 
   /** Tekstura wskazana w .sli (mipmapy tworzone po wczytaniu); null, dopóki się nie wczyta albo gdy jej nie ma. */
@@ -270,16 +315,18 @@ export class MapGrid {
   setSplines(data: MapSplines | null): void {
     this.splines = data;
     // delikatne różnicowanie kolorów: im szerszy przekrój, tym jaśniejszy i cieplejszy odcień
-    this.roadColors = (data?.roads ?? []).map((r) => {
+    this.roadHsl = (data?.roads ?? []).map((r) => {
       const t = Math.max(0, Math.min(1, (r.b - r.a - 2) / 20));
-      return `hsl(${Math.round(215 - t * 170)} 30% ${Math.round(26 + t * 24)}%)`;
+      return [Math.round(215 - t * 170), 30, Math.round(26 + t * 24)];
     });
+    this.roadColors = this.roadHsl.map(([hue, sat, light]) => `hsl(${hue} ${sat}% ${light}%)`);
+    this.preloadProfiles();
     this.draw();
   }
 
   /** Warstwy dodatkowe: ścieżki ruchu ze splinów (rysowane na wierzchu splinów). */
-  setLayers(l: { paths: boolean; stops: boolean; splines: boolean; textures?: boolean }): void {
-    this.layers = { textures: true, ...l };
+  setLayers(l: { paths: boolean; stops: boolean; splines: boolean; textures?: boolean; onlyEditor?: boolean }): void {
+    this.layers = { textures: true, onlyEditor: true, ...l };
     this.tip.hidden = true;
     this.draw();
   }
@@ -1218,13 +1265,13 @@ export class MapGrid {
   }
 
   /**
-   * Nakłada tekstury na pasy profilu .sli: każdy pas to odcinek przekroju z teksturą, współrzędną U na jego krawędziach i skalą V
+   * Nakłada teksturę na jeden pas profilu .sli: pas to odcinek przekroju z teksturą, współrzędną U na krawędziach i skalą V
    * na metr długości; wzór jest dopasowany do kolejnych kawałków łuku (≤ 15°), tak by tekstura podążała za splinem.
    * Współrzędna V liczy się od początku splinu z przesunięciem tekstury (ostatnia liczba wpisu) — ciągła między sąsiednimi splinami.
    */
-  private texturedBands(left: number, top: number, s: number[], sli: string, mPx: number): void {
-    const prof = this.profileFor(sli);
-    if (!prof) return;
+  private texturedBand(left: number, top: number, s: number[], sli: string, band: SliBand, mPx: number): void {
+    const prof = this.profiles.get(sli);
+    if (!prof || prof === 'loading') return;
     const ctx = this.ctx;
     const [, lx, ly, hdg, len, radius] = s;
     const mirror = !!s[6];
@@ -1232,38 +1279,34 @@ export class MapGrid {
     const k = radius !== 0 ? 1 / radius : 0;
     const phi0 = (hdg * Math.PI) / 180;
     const chunks = k === 0 ? 1 : Math.max(1, Math.ceil(Math.abs(len * k) / (Math.PI / 12)));
-    for (const band of prof.bands) {
-      const entry = this.textureFor(sli, prof.textures[band.tex]);
-      const du = band.u1 - band.u0;
-      if (!entry || Math.abs(du) < 1e-9) continue;
-      const x0 = mirror ? -band.x0 : band.x0;
-      const x1 = mirror ? -band.x1 : band.x1;
-      const kU = (x1 - x0) / du; // metry na jednostkę U
-      // poziom pomniejszenia: teksele na metr tekstury kontra piksele na metr ekranu
-      const texelsPerM = Math.max(entry.w / Math.max(Math.abs(kU), 1e-6), entry.h * Math.abs(band.vs));
-      let lvl = Math.max(0, Math.min(entry.mips.length - 1, Math.floor(Math.log2(Math.max(1, texelsPerM / mPx)))));
-      while (lvl > 0 && !entry.mips[lvl]) lvl--;
-      const bmp = entry.mips[lvl];
-      if (!bmp) continue;
-      const pat = (entry.pats[lvl] ??= ctx.createPattern(bmp, 'repeat'));
-      if (!pat) continue;
-      const W = bmp.width;
-      const H = bmp.height;
-      for (let c = 0; c < chunks; c++) {
-        if (this.texBudget-- <= 0) return;
-        const t0 = c / chunks;
-        const t1 = (c + 1) / chunks;
-        const sMid = (len * (t0 + t1)) / 2;
-        const phi = phi0 + k * sMid;
-        const mx = k === 0 ? Math.sin(phi0) * sMid : (Math.cos(phi0) - Math.cos(phi)) / k;
-        const my = k === 0 ? Math.cos(phi0) * sMid : (Math.sin(phi) - Math.sin(phi0)) / k;
-        const px = left + (lx + mx) * mPx;
-        const py = top + (300 - (ly + my)) * mPx;
-        pat.setTransform(texturePatternMatrix({ px, py, phi, mPx, u0: band.u0, x0, kU, vs: band.vs, texOff, sMid, W, H }));
-        this.strip(left, top, s, x0, x1, mPx, t0, t1);
-        ctx.fillStyle = pat;
-        ctx.fill();
-      }
+    const entry = this.textureFor(sli, prof.textures[band.tex]);
+    const du = band.u1 - band.u0;
+    if (!entry || Math.abs(du) < 1e-9) return;
+    const x0 = mirror ? -band.x0 : band.x0;
+    const x1 = mirror ? -band.x1 : band.x1;
+    const kU = (x1 - x0) / du; // metry na jednostkę U
+    // poziom pomniejszenia: teksele na metr tekstury kontra piksele na metr ekranu
+    const texelsPerM = Math.max(entry.w / Math.max(Math.abs(kU), 1e-6), entry.h * Math.abs(band.vs));
+    let lvl = Math.max(0, Math.min(entry.mips.length - 1, Math.floor(Math.log2(Math.max(1, texelsPerM / mPx)))));
+    while (lvl > 0 && !entry.mips[lvl]) lvl--;
+    const bmp = entry.mips[lvl];
+    if (!bmp) return;
+    const pat = (entry.pats[lvl] ??= ctx.createPattern(bmp, 'repeat'));
+    if (!pat) return;
+    for (let c = 0; c < chunks; c++) {
+      if (this.texBudget-- <= 0) return;
+      const t0 = c / chunks;
+      const t1 = (c + 1) / chunks;
+      const sMid = (len * (t0 + t1)) / 2;
+      const phi = phi0 + k * sMid;
+      const mx = k === 0 ? Math.sin(phi0) * sMid : (Math.cos(phi0) - Math.cos(phi)) / k;
+      const my = k === 0 ? Math.cos(phi0) * sMid : (Math.sin(phi) - Math.sin(phi0)) / k;
+      const px = left + (lx + mx) * mPx;
+      const py = top + (300 - (ly + my)) * mPx;
+      pat.setTransform(texturePatternMatrix({ px, py, phi, mPx, u0: band.u0, x0, kU, vs: band.vs, texOff, sMid, W: bmp.width, H: bmp.height }));
+      this.strip(left, top, s, x0, x1, mPx, t0, t1);
+      ctx.fillStyle = pat;
+      ctx.fill();
     }
   }
 
@@ -1283,7 +1326,8 @@ export class MapGrid {
       if (left + scale < 0 || top + scale < 0 || left > w || top > hh) continue;
       for (const s of t.s) visible.push({ left, top, s });
     }
-    visible.sort((p, q) => (p.s[7] ?? 0) - (q.s[7] ?? 0));
+    // spliny ukryte przez wyłączone „Tylko edytor” ([onlyeditor] w .sli) nie są rysowane ani z ścieżkami
+    const shown = visible.filter((v) => !this.hiddenEditorOnly(data.roads[v.s[0]]?.p));
     const trace = (left: number, top: number, s: number[], c: number): void => {
       const [, lx, ly, hdg, len, radius] = s;
       const k = radius !== 0 ? 1 / radius : 0; // dodatni promień = skręt w prawo (zgodnie z azymutem)
@@ -1303,7 +1347,18 @@ export class MapGrid {
     };
     const texturesOn = this.layers.textures && scale >= TEX_LOAD_SCALE;
     this.texBudget = scale >= TEX_DRAW_SCALE ? TEX_BUDGET : 0;
-    for (const { left, top, s } of this.layers.splines ? visible : []) {
+    // pasy profili .sli (od ok. 0,4 px/m); przy mniejszym zbliżeniu jeden pas na spline o pełnej szerokości przekroju
+    const profilesOn = scale >= PROFILE_SCALE;
+    interface Item {
+      z: number;
+      left: number;
+      top: number;
+      s: number[];
+      sli: string;
+      band: SliBand | null;
+    }
+    const items: Item[] = [];
+    for (const { left, top, s } of this.layers.splines ? shown : []) {
       const road = data.roads[s[0]];
       if (!road) continue;
       if (this.maxWidth > 0 && road.b - road.a > this.maxWidth) continue;
@@ -1312,17 +1367,41 @@ export class MapGrid {
       const x0 = left + s[1] * mPx;
       const y0 = top + (300 - s[2]) * mPx;
       if (x0 + rr < 0 || x0 - rr > w || y0 + rr < 0 || y0 - rr > hh) continue;
+      const prof = profilesOn ? this.profileFor(road.p) : null;
+      if (prof && prof.bands.length > 0) {
+        for (const band of prof.bands) items.push({ z: bandZ(s[7] ?? 0, s[11] ?? 0, band), left, top, s, sli: road.p, band });
+      } else {
+        items.push({ z: bandZ(s[7] ?? 0, s[11] ?? 0, { y0: 0, y1: 0 }), left, top, s, sli: road.p, band: null });
+      }
+    }
+    // kolejność warstw: najniższe pierwsze, najwyższe (też pasy w obrębie profilu: krawężnik nad jezdnią) na wierzchu
+    items.sort((p, q) => p.z - q.z);
+    for (const { left, top, s, sli, band } of items) {
+      const road = data.roads[s[0]];
+      if (!road) continue;
+      if (band) {
+        // pas profilu: krawędzie po odbiciu splinu zamieniają strony
+        const [uA, uB] = s[6] ? [-band.x0, -band.x1] : [band.x0, band.x1];
+        this.strip(left, top, s, uA, uB, mPx);
+        const color = this.bandColor(s[0], sli, band, texturesOn);
+        ctx.fillStyle = color;
+        ctx.fill();
+        // cienki kontur tym samym kolorem domyka szczeliny między sąsiednimi pasami (antyaliasing)
+        ctx.lineWidth = 0.7;
+        ctx.strokeStyle = color;
+        ctx.stroke();
+        if (this.texBudget > 0 && texturesOn) this.texturedBand(left, top, s, sli, band, mPx);
+        continue;
+      }
       // krawędzie przekroju względem osi splinu (po odbiciu strony się zamieniają)
       const [uA, uB] = s[6] ? [-road.b, -road.a] : [road.a, road.b];
       this.strip(left, top, s, uA, uB, mPx);
       const color = this.flatColor(s[0], road.p, texturesOn);
       ctx.fillStyle = color;
       ctx.fill();
-      // cienki kontur tym samym kolorem domyka szczeliny między sąsiednimi pasami (antyaliasing)
       ctx.lineWidth = 0.7;
       ctx.strokeStyle = color;
       ctx.stroke();
-      if (this.texBudget > 0 && texturesOn) this.texturedBands(left, top, s, road.p, mPx);
       if ((road.b - road.a) * mPx < 1) {
         // bardzo wąskie pasy (linie) przy małym zbliżeniu: minimalna widoczna szerokość 1 px
         trace(left, top, s, ((road.a + road.b) / 2) * (s[6] ? -1 : 1));
@@ -1335,7 +1414,7 @@ export class MapGrid {
       for (const pass of [0, 1]) {
         ctx.strokeStyle = pass === 0 ? '#ffffff' : '#ff1fd0';
         ctx.lineWidth = pass === 0 ? 3.4 : 1.6;
-        for (const { left, top, s } of visible) {
+        for (const { left, top, s } of shown) {
           for (const [x] of data.roads[s[0]]?.t ?? []) {
             trace(left, top, s, x * (s[6] ? -1 : 1));
             ctx.stroke();
@@ -1344,7 +1423,7 @@ export class MapGrid {
       }
       // strzałki kierunku ruchu: kierunek 1 w .sli albo odbicie splinu odwracają go, oba naraz się znoszą
       if (this.scale >= 220) {
-        for (const { left, top, s } of visible) {
+        for (const { left, top, s } of shown) {
           const [, lx, ly, hdg, len, radius] = s;
           const lenPx = len * mPx;
           if (lenPx < 28) continue;

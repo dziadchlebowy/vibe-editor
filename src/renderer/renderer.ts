@@ -687,7 +687,7 @@ function setPinMode(on: boolean): void {
   updateMapToolbar();
 }
 
-const mapLayers = { paths: false, stops: false, splines: true, textures: true };
+const mapLayers = { paths: false, stops: false, splines: true, textures: true, onlyEditor: true };
 const layerCbs: Partial<Record<keyof typeof mapLayers, HTMLInputElement>> = {};
 
 async function applyMapSettings(): Promise<void> {
@@ -2165,6 +2165,7 @@ function mountMapTab(): void {
       h('button', { class: 'btn', onClick: () => mapGrid.fit() }, 'Wycentruj'),
       rescanBtn,
       layerBox('Spliny', 'Rysuj spliny (jezdnie)', 'splines'),
+      layerBox('Tylko edytor', 'Spliny oznaczone w pliku .sli znacznikiem [onlyeditor] (pomocnicze, widoczne tylko w edytorze); wyłączenie ukrywa je na mapie', 'onlyEditor'),
       layerBox('Tekstury', 'Kolor i tekstury splinów z plików .sli (z folderu OMSI): kolor średni od ok. 1,5 px na metr, wzór od ok. 3 px na metr', 'textures'),
       layerBox('Ścieżki', 'Ścieżki ruchu ze splinów (po przeskanowaniu mapy)', 'paths'),
       layerBox('Przystanki', 'Przystanki (obiekty z [busstop]); najedź, by zobaczyć nazwę, kliknij, by edytować', 'stops'),

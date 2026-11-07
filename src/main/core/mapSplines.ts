@@ -176,7 +176,7 @@ export function buildSplinesData(
         i = roads.push({ p: sp.path, a: r3(e[0]), b: r3(e[1]), ...(t.length ? { t } : {}) }) - 1;
         idx.set(key, i);
       }
-      s.push([i, r3(sp.x), r3(sp.y), r3(sp.heading), r3(sp.length), r3(sp.radius), sp.mirror ? 1 : 0, r3(sp.z), r3(sp.skew0), r3(sp.skew1), r3(sp.texOff)]);
+      s.push([i, r3(sp.x), r3(sp.y), r3(sp.heading), r3(sp.length), r3(sp.radius), sp.mirror ? 1 : 0, r3(sp.z), r3(sp.skew0), r3(sp.skew1), r3(sp.texOff), r3(sp.dz)]);
     }
     outTiles.push({ x: t.x, y: t.y, s });
   }
